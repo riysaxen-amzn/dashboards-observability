@@ -343,7 +343,7 @@ export function buildTableColumns({
       cols.push({
         field: 'group',
         name: i18n.translate('observability.alerting.monitorsTable.columns.group', {
-          defaultMessage: 'Group',
+          defaultMessage: 'Rule Group',
         }),
         width: w('group'),
         render: (g: string) => g || '-',

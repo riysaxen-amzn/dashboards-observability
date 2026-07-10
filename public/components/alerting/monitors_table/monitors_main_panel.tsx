@@ -36,6 +36,7 @@ import { ForecasterDetailFlyout } from '../forecaster_detail_flyout';
 import { MonitorDetailFlyout } from '../monitor_detail_flyout';
 import { isDetectorDefinition, isForecasterDefinition } from './monitors_table_columns';
 import { MonitorsEuiTable } from './monitors_eui_table';
+import { GroupedRulesView } from './grouped_rules_view';
 
 export interface MonitorsMainPanelProps {
   // Data
@@ -471,7 +472,7 @@ export const MonitorsMainPanel: React.FC<MonitorsMainPanelProps> = ({
               }
             />
           ) : (
-            <MonitorsEuiTable
+            <GroupedRulesView
               items={filtered}
               columns={tableColumns}
               loading={loading}
@@ -480,27 +481,6 @@ export const MonitorsMainPanel: React.FC<MonitorsMainPanelProps> = ({
           )}
         </div>
       </EuiPanel>
-
-      {/* Prometheus hierarchy explanation */}
-      {filtered.some((item: { monitorType?: string }) => item.monitorType === 'metric') && (
-        <EuiPanel paddingSize="s" color="subdued" style={{ marginTop: 8 }}>
-          <EuiText size="xs" color="subdued">
-            <strong>
-              {i18n.translate('observability.alerting.monitorsTable.hierarchyTitle', {
-                defaultMessage: 'Prometheus rule organization',
-              })}
-            </strong>
-            {': '}
-            {i18n.translate('observability.alerting.monitorsTable.hierarchyExplanation', {
-              defaultMessage:
-                'Namespace → Rule Group → Rule. ' +
-                'A namespace (e.g. "observability-alerting") contains rule groups, ' +
-                'and each group contains rules that share the same evaluation interval. ' +
-                'Rules shown here are grouped by their rule group name.',
-            })}
-          </EuiText>
-        </EuiPanel>
-      )}
 
       {/* Delete confirmation modal */}
       {showDeleteConfirm && (
