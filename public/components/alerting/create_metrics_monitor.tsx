@@ -69,6 +69,8 @@ interface ActionState {
 export interface MetricsMonitorFormState {
   monitorName: string;
   description: string;
+  namespace: string;
+  groupName: string;
   query: string;
   datasourceId: string;
   // Trigger condition
@@ -379,6 +381,41 @@ const MonitorDetailsSection = React.memo<{
     paddingSize="m"
   >
     <EuiFormRow
+      label={i18n.translate('observability.alerting.createMetricsMonitor.namespaceLabel', {
+        defaultMessage: 'Namespace',
+      })}
+      helpText={i18n.translate('observability.alerting.createMetricsMonitor.namespaceHelp', {
+        defaultMessage:
+          'Logical grouping for rule groups. All rules created here are stored under the "observability-alerting" namespace.',
+      })}
+      fullWidth
+    >
+      <EuiFieldText value="observability-alerting" readOnly fullWidth compressed />
+    </EuiFormRow>
+    <EuiSpacer size="m" />
+    <EuiFormRow
+      label={i18n.translate('observability.alerting.createMetricsMonitor.groupNameLabel', {
+        defaultMessage: 'Rule group',
+      })}
+      helpText={i18n.translate('observability.alerting.createMetricsMonitor.groupNameHelp', {
+        defaultMessage:
+          'Rules within a group share an evaluation interval and are evaluated together.',
+      })}
+      fullWidth
+    >
+      <EuiFieldText
+        placeholder={i18n.translate(
+          'observability.alerting.createMetricsMonitor.groupNamePlaceholder',
+          { defaultMessage: 'Enter a rule group name (defaults to rule name)' }
+        )}
+        value={form.groupName}
+        onChange={(e) => onUpdate({ groupName: e.target.value })}
+        fullWidth
+        compressed
+      />
+    </EuiFormRow>
+    <EuiSpacer size="m" />
+    <EuiFormRow
       label={i18n.translate('observability.alerting.createMetricsMonitor.monitorNameLabel', {
         defaultMessage: 'Rule name',
       })}
@@ -399,6 +436,15 @@ const MonitorDetailsSection = React.memo<{
         )}
       />
     </EuiFormRow>
+    <EuiSpacer size="s" />
+    <EuiText size="xs" color="subdued">
+      {i18n.translate('observability.alerting.createMetricsMonitor.hierarchyExplanation', {
+        defaultMessage:
+          'Prometheus rules are organized as: Namespace → Rule Group → Rule. ' +
+          'A namespace contains one or more rule groups, and each group contains one or more rules ' +
+          'that share the same evaluation interval.',
+      })}
+    </EuiText>
     <EuiSpacer size="m" />
     <EuiFormRow
       label={
@@ -1368,6 +1414,8 @@ export const CreateMetricsMonitor: React.FC<CreateMetricsMonitorProps> = ({
   const [form, setForm] = useState<MetricsMonitorFormState>({
     monitorName: '',
     description: '',
+    namespace: 'default',
+    groupName: '',
     query: DEFAULT_PROMQL,
     datasourceId: contextDatasourceId || '',
     operator: '>',
@@ -1465,7 +1513,7 @@ export const CreateMetricsMonitor: React.FC<CreateMetricsMonitorProps> = ({
           form.annotations.filter((a) => a.key.trim()).map((a) => [a.key, a.value])
         ),
         enabled: true,
-        groupName: form.monitorName,
+        groupName: form.groupName || form.monitorName,
       };
       await http.post(`/api/alerting/prometheus/${encodeURIComponent(form.datasourceId)}/rules`, {
         body: JSON.stringify(payload),
