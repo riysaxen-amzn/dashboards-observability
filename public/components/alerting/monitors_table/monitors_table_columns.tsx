@@ -39,6 +39,7 @@ import {
   isForecasterRule,
   SEVERITY_COLORS,
   STATUS_COLORS,
+  STATUS_DISPLAY_LABELS,
   TYPE_LABELS,
 } from '../shared_constants';
 import { DEFAULT_WIDTHS } from './resizable_columns';
@@ -220,7 +221,7 @@ export function buildTableColumns({
         width: w('status'),
         render: (s: MonitorStatus, item: UnifiedRuleSummary) => {
           const cw = item.cloudWatch;
-          const unifiedLabel = cw && cw.state === 'INSUFFICIENT_DATA' ? 'insufficient data' : s;
+          const unifiedLabel = STATUS_DISPLAY_LABELS[s] || s;
           return (
             <EuiFlexGroup gutterSize="xs" alignItems="center" responsive={false} wrap>
               <EuiFlexItem grow={false}>

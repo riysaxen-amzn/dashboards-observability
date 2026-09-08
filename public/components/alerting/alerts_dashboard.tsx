@@ -43,7 +43,7 @@ import { UnifiedAlertSummary, Datasource } from '../../../common/types/alerting'
 import { filterAlerts } from '../../../common/services/alerting/filter';
 import { AlertTimeline } from './alerts_charts';
 import { FacetFilterGroup, useFacetCollapse } from './facet_filter_panel';
-import { countBy, isStandardOpenSearchDatasource } from './shared_constants';
+import { countBy, isStandardOpenSearchDatasource, STATUS_DISPLAY_LABELS } from './shared_constants';
 import { INTERNAL_LABEL_KEYS } from './monitors_table/monitors_table_helpers';
 import './alerting.scss';
 
@@ -62,6 +62,7 @@ const STATE_COLORS: Record<string, string> = {
   active: '#BD271E',
   anomaly: '#B8821C',
   pending: '#F5A700',
+  insufficient_data: '#F5A700',
   acknowledged: '#006BB4',
   resolved: '#017D73',
   error: '#BD271E',
@@ -71,6 +72,7 @@ const STATE_HEALTH: Record<string, string> = {
   active: 'danger',
   anomaly: '#B8821C',
   pending: 'warning',
+  insufficient_data: 'warning',
   acknowledged: 'primary',
   resolved: 'success',
   error: 'danger',
@@ -923,7 +925,8 @@ export const AlertsDashboard: React.FC<AlertsDashboardProps> = ({
     counts: Record<string, number>,
     colorMap?: Record<string, string>,
     defaultCollapsed = false,
-    showOptionCount = false
+    showOptionCount = false,
+    displayMap?: Record<string, string>
   ) => (
     <FacetFilterGroup
       key={id}
@@ -934,6 +937,7 @@ export const AlertsDashboard: React.FC<AlertsDashboardProps> = ({
       onChange={onChange}
       counts={counts}
       colorMap={colorMap}
+      displayMap={displayMap}
       showOptionCount={showOptionCount}
       isCollapsed={isFacetCollapsed(id, defaultCollapsed)}
       onToggleCollapse={(facetId) => toggleFacetCollapse(facetId, defaultCollapsed)}
@@ -1058,7 +1062,11 @@ export const AlertsDashboard: React.FC<AlertsDashboardProps> = ({
         sortable: (alert: AlertTableRow) => getAlertDisplayState(alert),
         render: (_state: string, alert: AlertTableRow) => {
           const state = getAlertDisplayState(alert);
-          return <EuiHealth color={STATE_HEALTH[state] || 'subdued'}>{state}</EuiHealth>;
+          return (
+            <EuiHealth color={STATE_HEALTH[state] || 'subdued'}>
+              {STATUS_DISPLAY_LABELS[state] || state}
+            </EuiHealth>
+          );
         },
       },
       {
@@ -1327,7 +1335,10 @@ export const AlertsDashboard: React.FC<AlertsDashboardProps> = ({
                   filters.state,
                   (v) => updateFilter('state', v),
                   facetCounts.counts.state,
-                  STATE_COLORS
+                  STATE_COLORS,
+                  false,
+                  false,
+                  STATUS_DISPLAY_LABELS
                 )}
                 {(() => {
                   const visibleLabelKeys = labelKeys.filter(

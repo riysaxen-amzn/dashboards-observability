@@ -37,7 +37,13 @@ import {
   UnifiedRuleSummary,
 } from '../../../../common/types/alerting';
 import { FacetFilterGroup } from '../facet_filter_panel';
-import { HEALTH_COLORS, SEVERITY_COLORS, STATUS_COLORS, TYPE_LABELS } from '../shared_constants';
+import {
+  HEALTH_COLORS,
+  SEVERITY_COLORS,
+  STATUS_COLORS,
+  STATUS_DISPLAY_LABELS,
+  TYPE_LABELS,
+} from '../shared_constants';
 import { collectLabelValues, FilterState } from './monitors_table_filters';
 import { INTERNAL_LABEL_KEYS, SavedSearch } from './monitors_table_helpers';
 
@@ -253,7 +259,7 @@ export const MonitorsFiltersPanel: React.FC<MonitorsFiltersPanelProps> = ({
           filters.status,
           (v) => updateFilter('status', v as MonitorStatus[]),
           facetCounts.counts.status,
-          undefined,
+          STATUS_DISPLAY_LABELS,
           STATUS_COLORS
         )}
         {renderFacetGroup(

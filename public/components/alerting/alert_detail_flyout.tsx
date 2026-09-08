@@ -33,7 +33,7 @@ import { FormattedMessage } from '@osd/i18n/react';
 import { UnifiedAlert, UnifiedAlertSummary, Datasource } from '../../../common/types/alerting';
 import { AnomalyDetailContent } from './anomaly_detail_flyout';
 import { AlertingOpenSearchService } from './query_services/alerting_opensearch_service';
-import { SEVERITY_COLORS, STATE_COLORS } from './shared_constants';
+import { SEVERITY_COLORS, STATE_COLORS, STATUS_DISPLAY_LABELS } from './shared_constants';
 
 /** Internal label keys filtered from the Labels accordion display. */
 const INTERNAL_LABEL_KEYS = new Set([
@@ -255,7 +255,9 @@ export const AlertDetailFlyout: React.FC<AlertDetailFlyoutProps> = ({
           <EuiFlexItem grow={false}>
             <EuiFlexGroup gutterSize="xs" alignItems="center" responsive={false}>
               <EuiFlexItem grow={false}>
-                <EuiHealth color={STATE_COLORS[alert.state]}>{alert.state}</EuiHealth>
+                <EuiHealth color={STATE_COLORS[alert.state]}>
+                  {STATUS_DISPLAY_LABELS[alert.state] || alert.state}
+                </EuiHealth>
               </EuiFlexItem>
               <EuiFlexItem grow={false}>
                 <EuiBadge color={SEVERITY_COLORS[alert.severity]}>{alert.severity}</EuiBadge>

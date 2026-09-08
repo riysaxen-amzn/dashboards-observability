@@ -243,7 +243,7 @@ export interface DatasourceService {
 
 export type UnifiedAlertSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type UnifiedAlertState =
-  'active' | 'pending' | 'acknowledged' | 'silenced' | 'resolved' | 'error';
+  'active' | 'pending' | 'insufficient_data' | 'acknowledged' | 'silenced' | 'resolved' | 'error';
 export type UnifiedAlertKind = 'alert' | 'anomaly';
 
 /** Lightweight alert representation for list views and tables. */
@@ -298,6 +298,7 @@ export type MonitorType =
 export type MonitorStatus =
   | 'active'
   | 'pending'
+  | 'insufficient_data'
   | 'muted'
   | 'disabled'
   | 'Running'

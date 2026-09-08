@@ -41,10 +41,20 @@ export const SEVERITY_COLORS: Record<string, string> = {
 export const STATE_COLORS: Record<string, string> = {
   active: 'danger',
   pending: 'warning',
+  insufficient_data: 'warning',
   acknowledged: 'primary',
   silenced: 'default',
   resolved: 'success',
   error: 'danger',
+};
+
+/**
+ * Human-readable labels for status/state values whose raw form contains
+ * underscores. Chips and facet filters render `STATUS_DISPLAY_LABELS[v] || v`.
+ * Applies to both UnifiedAlertState and MonitorStatus values.
+ */
+export const STATUS_DISPLAY_LABELS: Record<string, string> = {
+  insufficient_data: 'insufficient data',
 };
 
 // ============================================================================
@@ -57,6 +67,7 @@ export const STATE_COLORS: Record<string, string> = {
 export const STATUS_COLORS: Record<string, string> = {
   active: 'danger',
   pending: 'warning',
+  insufficient_data: 'warning',
   muted: 'default',
   disabled: 'subdued',
   Running: 'success',
