@@ -23,6 +23,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   EuiBadge,
+  EuiButton,
   EuiButtonEmpty,
   EuiCallOut,
   EuiCodeBlock,
@@ -56,6 +57,7 @@ import type {
   UnifiedAlertSeverity,
 } from '../../../common/types/alerting';
 import { EchartsRender } from './echarts_render';
+import { ClassifiedErrorCallout } from '../common/error';
 import { useCloudWatchAlarmDetail } from './hooks/use_cloudwatch_alarm_detail';
 import { AlertingOpenSearchService } from './query_services/alerting_opensearch_service';
 import { SEVERITY_COLORS } from './shared_constants';
@@ -473,7 +475,10 @@ export const CloudWatchAlarmDetailFlyout: React.FC<CloudWatchAlarmDetailFlyoutPr
   const [stack, setStack] = useState<CloudWatchAlarmFlyoutRow[]>([rule]);
   const current = stack[stack.length - 1];
   const alarmName = current.id;
-  const { detail, isLoading, error } = useCloudWatchAlarmDetail({ dsId, alarmName });
+  const { detail, isLoading, error, classifiedError, retry } = useCloudWatchAlarmDetail({
+    dsId,
+    alarmName,
+  });
 
   const openAlarm = useCallback<OpenAlarmFn>((node) => {
     setStack((s) => [
@@ -616,21 +621,45 @@ export const CloudWatchAlarmDetailFlyout: React.FC<CloudWatchAlarmDetailFlyoutPr
         {isLoading && <EuiLoadingContent lines={6} />}
 
         {!isLoading && error && (
-          <EuiCallOut
-            color="danger"
-            iconType="alert"
-            title={i18n.translate('observability.alerting.cloudwatch.loadErrorTitle', {
-              defaultMessage: 'Could not load alarm detail from CloudWatch',
-            })}
-          >
-            <p>{error.message}</p>
-            <p>
-              {i18n.translate('observability.alerting.cloudwatch.loadErrorHint', {
-                defaultMessage:
-                  'Check that the server has valid AWS credentials and cloudwatch:DescribeAlarms permission, then reopen this alarm.',
+          <>
+            {/* Prefer the structured classification when the server attached
+                one: it names the failure class (expired session, missing
+                permission, unreachable region, …) with remediation and safe
+                diagnostics. Fall back to the generic callout otherwise. */}
+            {classifiedError ? (
+              <ClassifiedErrorCallout
+                error={classifiedError}
+                dataTestSubj="cwAlarmDetailClassifiedError"
+              />
+            ) : (
+              <EuiCallOut
+                color="danger"
+                iconType="alert"
+                title={i18n.translate('observability.alerting.cloudwatch.loadErrorTitle', {
+                  defaultMessage: 'Could not load alarm detail from CloudWatch',
+                })}
+              >
+                <p>{error.message}</p>
+                <p>
+                  {i18n.translate('observability.alerting.cloudwatch.loadErrorHint', {
+                    defaultMessage:
+                      'Check that the server has valid AWS credentials and cloudwatch:DescribeAlarms permission, then reopen this alarm.',
+                  })}
+                </p>
+              </EuiCallOut>
+            )}
+            <EuiSpacer size="s" />
+            <EuiButton
+              size="s"
+              iconType="refresh"
+              onClick={retry}
+              data-test-subj="cwAlarmDetailRetry"
+            >
+              {i18n.translate('observability.alerting.cloudwatch.loadErrorRetry', {
+                defaultMessage: 'Retry',
               })}
-            </p>
-          </EuiCallOut>
+            </EuiButton>
+          </>
         )}
 
         {!isLoading && detail && (

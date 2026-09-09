@@ -47,6 +47,8 @@ import {
   UnifiedRuleSummary,
 } from '../../../common/types/alerting';
 import { parseDateMathMs, computeStep } from '../../../common/services/alerting';
+import { classifyError, toClientPayload, ErrorCode } from '../../../common/error';
+import type { ClassifiedError } from '../../../common/error';
 import { TimeoutError } from './timeout_error';
 import { extractErrorMessage, isStatusCode } from './errors';
 import {
@@ -97,6 +99,40 @@ export const FANOUT_CONCURRENCY = 5;
  * of chunk[1] from even starting. Workers consume the queue independently
  * so a fast datasource doesn't wait on a slow one in the same batch.
  */
+/**
+ * Classify a per-datasource fetch failure into a client-safe `ClassifiedError`
+ * for `DatasourceWarning.errorDetail` / `DatasourceFetchResult.errorDetail`.
+ *
+ * Returns `undefined` when only the UNKNOWN fallback matched — in that case
+ * the raw `error` string already on the warning is more informative than a
+ * generic "Something went wrong", so the UI keeps its existing wording.
+ *
+ * Sensitive details are always stripped here (no operator opt-in): warnings
+ * ride the 200 list responses, which bypass the route error boundary where
+ * the expose-sensitive policy is normally applied.
+ */
+export function classifyDatasourceFailure(
+  err: unknown,
+  ds: Datasource,
+  operation: string
+): ClassifiedError | undefined {
+  const e = err as {
+    name?: unknown;
+    message?: unknown;
+    $metadata?: { httpStatusCode?: unknown };
+  } | null;
+  const classified = classifyError({
+    operation,
+    sourceType: ds.type,
+    errorName: typeof e?.name === 'string' ? e.name : undefined,
+    message: typeof e?.message === 'string' ? e.message : err == null ? undefined : String(err),
+    httpStatus:
+      typeof e?.$metadata?.httpStatusCode === 'number' ? e.$metadata.httpStatusCode : undefined,
+  });
+  if (classified.code === ErrorCode.UNKNOWN_ERROR) return undefined;
+  return toClientPayload(classified, { exposeSensitive: false });
+}
+
 export async function runWithConcurrencyLimit<T>(
   tasks: Array<() => Promise<T>>,
   concurrency: number = FANOUT_CONCURRENCY
@@ -490,6 +526,11 @@ export class MultiBackendAlertService {
           status: 'error',
           data: [],
           error: extractErrorMessage(settled.reason),
+          errorDetail: classifyDatasourceFailure(
+            settled.reason,
+            datasources[i],
+            'unified.alerts.fetch'
+          ),
           durationMs: timeoutMs,
         };
         statusList.push(errResult);
@@ -538,6 +579,11 @@ export class MultiBackendAlertService {
           status: 'error',
           data: [],
           error: extractErrorMessage(settled.reason),
+          errorDetail: classifyDatasourceFailure(
+            settled.reason,
+            datasources[i],
+            'unified.rules.fetch'
+          ),
           durationMs: timeoutMs,
         };
         statusList.push(errResult);
@@ -583,11 +629,17 @@ export class MultiBackendAlertService {
             datasources[i].id
           }): ${extractErrorMessage(settled.reason)}`
         );
+        const errorDetail = classifyDatasourceFailure(
+          settled.reason,
+          datasources[i],
+          'unified.rules.fetch'
+        );
         warnings.push({
           datasourceId: datasources[i].id,
           datasourceName: datasources[i].name,
           datasourceType: datasources[i].type,
           error: extractErrorMessage(settled.reason),
+          ...(errorDetail !== undefined ? { errorDetail } : {}),
         });
       }
     }
@@ -638,11 +690,17 @@ export class MultiBackendAlertService {
             datasources[i].id
           }): ${extractErrorMessage(settled.reason)}`
         );
+        const errorDetail = classifyDatasourceFailure(
+          settled.reason,
+          datasources[i],
+          'unified.alerts.fetch'
+        );
         warnings.push({
           datasourceId: datasources[i].id,
           datasourceName: datasources[i].name,
           datasourceType: datasources[i].type,
           error: extractErrorMessage(settled.reason),
+          ...(errorDetail !== undefined ? { errorDetail } : {}),
         });
       }
     }
@@ -742,7 +800,11 @@ export class MultiBackendAlertService {
       status: DatasourceFetchStatus,
       data: UnifiedAlertSummary[],
       error?: string,
-      extra?: { truncated?: boolean; fallback?: DatasourceFetchFallback }
+      extra?: {
+        truncated?: boolean;
+        fallback?: DatasourceFetchFallback;
+        errorDetail?: ClassifiedError;
+      }
     ): DatasourceFetchResult<UnifiedAlertSummary> => ({
       datasourceId: ds.id,
       datasourceName: ds.name,
@@ -753,6 +815,7 @@ export class MultiBackendAlertService {
       durationMs: Date.now() - start,
       ...(extra?.truncated !== undefined ? { truncated: extra.truncated } : {}),
       ...(extra?.fallback !== undefined ? { fallback: extra.fallback } : {}),
+      ...(extra?.errorDetail !== undefined ? { errorDetail: extra.errorDetail } : {}),
     });
 
     try {
@@ -769,7 +832,9 @@ export class MultiBackendAlertService {
       return result;
     } catch (err) {
       const isTimeout = err instanceof TimeoutError;
-      const result = makeResult(isTimeout ? 'timeout' : 'error', [], extractErrorMessage(err));
+      const result = makeResult(isTimeout ? 'timeout' : 'error', [], extractErrorMessage(err), {
+        errorDetail: classifyDatasourceFailure(err, ds, 'unified.alerts.fetch'),
+      });
       this.logger.error(`Failed to fetch alerts from ${ds.name}: ${extractErrorMessage(err)}`);
       if (onProgress) onProgress(result);
       return result;
@@ -786,7 +851,8 @@ export class MultiBackendAlertService {
     const makeResult = (
       status: DatasourceFetchStatus,
       data: UnifiedRuleSummary[],
-      error?: string
+      error?: string,
+      errorDetail?: ClassifiedError
     ): DatasourceFetchResult<UnifiedRuleSummary> => ({
       datasourceId: ds.id,
       datasourceName: ds.name,
@@ -795,6 +861,7 @@ export class MultiBackendAlertService {
       data,
       error,
       durationMs: Date.now() - start,
+      ...(errorDetail !== undefined ? { errorDetail } : {}),
     });
 
     try {
@@ -808,7 +875,12 @@ export class MultiBackendAlertService {
       return result;
     } catch (err) {
       const isTimeout = err instanceof TimeoutError;
-      const result = makeResult(isTimeout ? 'timeout' : 'error', [], extractErrorMessage(err));
+      const result = makeResult(
+        isTimeout ? 'timeout' : 'error',
+        [],
+        extractErrorMessage(err),
+        classifyDatasourceFailure(err, ds, 'unified.rules.fetch')
+      );
       this.logger.error(`Failed to fetch rules from ${ds.name}: ${extractErrorMessage(err)}`);
       if (onProgress) onProgress(result);
       return result;
