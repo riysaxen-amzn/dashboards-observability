@@ -33,8 +33,11 @@ import { useToast } from '../common/toast';
 import {
   ClassifiedErrorToastBody,
   classifiedToastColor,
+  classifiedToastText,
   extractClassifiedError,
 } from '../common/error';
+import { localizeClassified } from '../../../common/error';
+import type { ClassifiedError } from '../../../common/error';
 import {
   Datasource,
   UnifiedAlertSummary,
@@ -375,6 +378,7 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({
         i18n.translate('observability.alerting.alarmsPage.unknownError', {
           defaultMessage: 'Unknown error',
         }),
+      errorDetail: s.errorDetail,
     }));
   }, [alertsData]);
   // Backend hints surfaced through the dashboard banner props.
@@ -1389,8 +1393,16 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({
   //   - `datasourceErrorsByName` for the FacetFilterGroup indicator (keyed
   //     by option label, which is the datasource name)
   const datasourceIssues = useMemo(() => {
-    const byId = new Map<string, { datasourceId: string; datasourceName: string; error: string }>();
-    const addOnce = (dsName: string, message: string) => {
+    const byId = new Map<
+      string,
+      {
+        datasourceId: string;
+        datasourceName: string;
+        error: string;
+        errorDetail?: ClassifiedError;
+      }
+    >();
+    const addOnce = (dsName: string, message: string, errorDetail?: ClassifiedError) => {
       // Look up id by name — both `alertsWarnings` and `rulesWarnings`
       // carry the display name, not the id. Fall back to name as the key
       // if the datasource list hasn't hydrated yet.
@@ -1401,10 +1413,11 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({
           datasourceId: id,
           datasourceName: dsName,
           error: message,
+          errorDetail,
         });
     };
-    for (const w of alertsWarnings) addOnce(w.datasourceName, w.error);
-    for (const w of rulesWarnings) addOnce(w.datasourceName, w.error);
+    for (const w of alertsWarnings) addOnce(w.datasourceName, w.error, w.errorDetail);
+    for (const w of rulesWarnings) addOnce(w.datasourceName, w.error, w.errorDetail);
     // Alerting-plugin probe: only decorate individual DSes when the probe
     // is finished (avoids flashing the indicator during the initial mount)
     // AND we're not already in the "everything failed" state — that latter
@@ -1440,6 +1453,16 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({
   const datasourceErrorMapByName = useMemo(() => {
     const m: Record<string, string> = {};
     for (const issue of datasourceIssues) {
+      // Prefer the structured classification when the server attached one —
+      // it names the failure class (e.g. "AWS session expired") and carries
+      // remediation + safe diagnostics, which reads far better than the raw
+      // transport message. Fall back to the legacy "Could not connect"
+      // framing for unclassified failures.
+      if (issue.errorDetail) {
+        const localized = localizeClassified(issue.errorDetail);
+        m[issue.datasourceName] = `${localized.title} — ${classifiedToastText(localized)}`;
+        continue;
+      }
       // Frame the raw error with the same "Could not connect" language the
       // toast uses so the indicator popover reads as a complete thought
       // (the raw error alone — e.g. "getaddrinfo ENOTFOUND opensearch" — is

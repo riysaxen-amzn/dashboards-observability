@@ -23,6 +23,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   EuiBadge,
+  EuiButton,
   EuiButtonEmpty,
   EuiCallOut,
   EuiCodeBlock,
@@ -48,6 +49,7 @@ import type {
   CloudWatchAlarm,
   CloudWatchAlarmHistoryItem,
   CloudWatchAlarmState,
+  CloudWatchAlarmType,
   CloudWatchMetricPreview,
   CloudWatchRelationshipGraph,
   CloudWatchRelationshipNode,
@@ -56,6 +58,7 @@ import type {
   UnifiedAlertSeverity,
 } from '../../../common/types/alerting';
 import { EchartsRender } from './echarts_render';
+import { ClassifiedErrorCallout } from '../common/error';
 import { useCloudWatchAlarmDetail } from './hooks/use_cloudwatch_alarm_detail';
 import { AlertingOpenSearchService } from './query_services/alerting_opensearch_service';
 import { SEVERITY_COLORS } from './shared_constants';
@@ -69,7 +72,12 @@ export interface CloudWatchAlarmFlyoutRow {
   id: string;
   name: string;
   datasourceId: string;
-  severity: UnifiedAlertSeverity;
+  /**
+   * Optional: rows pushed by in-flyout navigation (parent/child drill-down)
+   * don't know severity until the detail loads; the header falls back to
+   * 'info' and re-derives it from the fetched alarm.
+   */
+  severity?: UnifiedAlertSeverity;
   monitorType?: MonitorType;
   cloudWatch?: UnifiedCloudWatchMeta;
 }
@@ -170,6 +178,8 @@ function buildMetricPreviewSpec(preview: CloudWatchMetricPreview): echarts.EChar
     },
     xAxis: { type: 'time' },
     yAxis: { type: 'value', scale: true },
+    // Cast: the bundled echarts typings reject valid literal option shapes
+    // (markLine/markArea unions); the values conform to the runtime API.
     series: [
       {
         name: seriesName,
@@ -199,7 +209,7 @@ function buildMetricPreviewSpec(preview: CloudWatchMetricPreview): echarts.EChar
         lineStyle: { color: STATE_BAND_FILL },
         itemStyle: { color: STATE_HEX.ALARM, opacity: 0.35 },
       },
-    ],
+    ] as unknown as echarts.EChartsOption['series'],
   };
 }
 
@@ -231,7 +241,9 @@ const RelationshipRow: React.FC<{
               </EuiBadge>
             </EuiFlexItem>
           )}
-          <EuiFlexItem grow={false}>
+          {/* minWidth 0 + overflowWrap lets long unbroken alarm names wrap
+              inside the row instead of pushing past the flyout edge. */}
+          <EuiFlexItem grow={false} style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
             {node.deleted ? (
               <EuiTextColor color="subdued">
                 <s>{node.alarmName}</s>
@@ -337,7 +349,7 @@ const RelationshipsSection: React.FC<{
                     })}
                   </EuiBadge>
                 </EuiFlexItem>
-                <EuiFlexItem grow={false}>
+                <EuiFlexItem grow={false} style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
                   <EuiLink onClick={() => onOpen(p)}>{p.alarmName}</EuiLink>
                 </EuiFlexItem>
                 <EuiFlexItem grow={false}>
@@ -415,7 +427,13 @@ const StateTimeline: React.FC<{ history?: CloudWatchAlarmHistoryItem[] }> = ({ h
   // state interval) so it uses the same viz engine as the rest of the plugin.
   const spec: echarts.EChartsOption = {
     grid: { left: 0, right: 0, top: 2, bottom: 2 },
-    tooltip: { trigger: 'item', formatter: (p: { seriesName?: string }) => p.seriesName || '' },
+    tooltip: {
+      trigger: 'item',
+      // Cast: echarts' TooltipOption formatter typing rejects this narrower
+      // (and safe) param shape; only `seriesName` is read.
+      formatter: ((p: { seriesName?: string }) =>
+        p.seriesName || '') as unknown as echarts.TooltipComponentOption['formatter'],
+    },
     xAxis: { type: 'value', min: 0, max: total, show: false },
     yAxis: { type: 'category', data: [''], show: false },
     series: segments.map((s) => ({
@@ -473,21 +491,28 @@ export const CloudWatchAlarmDetailFlyout: React.FC<CloudWatchAlarmDetailFlyoutPr
   const [stack, setStack] = useState<CloudWatchAlarmFlyoutRow[]>([rule]);
   const current = stack[stack.length - 1];
   const alarmName = current.id;
-  const { detail, isLoading, error } = useCloudWatchAlarmDetail({ dsId, alarmName });
+  const { detail, isLoading, error, classifiedError, retry } = useCloudWatchAlarmDetail({
+    dsId,
+    alarmName,
+  });
 
-  const openAlarm = useCallback<OpenAlarmFn>((node) => {
-    setStack((s) => [
-      ...s,
-      {
-        id: node.alarmName,
-        name: node.alarmName,
-        monitorType: node.alarmType,
-        cloudWatch: node.stateValue
-          ? { state: node.stateValue, alarmType: node.alarmType || 'metric' }
-          : undefined,
-      },
-    ]);
-  }, []);
+  const openAlarm = useCallback<OpenAlarmFn>(
+    (node) => {
+      setStack((s) => [
+        ...s,
+        {
+          id: node.alarmName,
+          name: node.alarmName,
+          datasourceId: dsId,
+          monitorType: node.alarmType,
+          cloudWatch: node.stateValue
+            ? { state: node.stateValue, alarmType: node.alarmType || 'metric' }
+            : undefined,
+        },
+      ]);
+    },
+    [dsId]
+  );
   const goBack = useCallback(() => {
     setStack((s) => (s.length > 1 ? s.slice(0, -1) : s));
   }, []);
@@ -565,7 +590,11 @@ export const CloudWatchAlarmDetailFlyout: React.FC<CloudWatchAlarmDetailFlyoutPr
         <EuiFlexGroup justifyContent="spaceBetween" alignItems="flexStart" gutterSize="s">
           <EuiFlexItem>
             <EuiTitle size="m">
-              <h2 id="cwAlarmFlyoutTitle">{displayName}</h2>
+              {/* Alarm names can be 255 chars with no spaces — force wrapping
+                  so the title never overflows the flyout header. */}
+              <h2 id="cwAlarmFlyoutTitle" style={{ overflowWrap: 'anywhere' }}>
+                {displayName}
+              </h2>
             </EuiTitle>
           </EuiFlexItem>
           <EuiFlexItem grow={false}>
@@ -616,21 +645,45 @@ export const CloudWatchAlarmDetailFlyout: React.FC<CloudWatchAlarmDetailFlyoutPr
         {isLoading && <EuiLoadingContent lines={6} />}
 
         {!isLoading && error && (
-          <EuiCallOut
-            color="danger"
-            iconType="alert"
-            title={i18n.translate('observability.alerting.cloudwatch.loadErrorTitle', {
-              defaultMessage: 'Could not load alarm detail from CloudWatch',
-            })}
-          >
-            <p>{error.message}</p>
-            <p>
-              {i18n.translate('observability.alerting.cloudwatch.loadErrorHint', {
-                defaultMessage:
-                  'Check that the server has valid AWS credentials and cloudwatch:DescribeAlarms permission, then reopen this alarm.',
+          <>
+            {/* Prefer the structured classification when the server attached
+                one: it names the failure class (expired session, missing
+                permission, unreachable region, …) with remediation and safe
+                diagnostics. Fall back to the generic callout otherwise. */}
+            {classifiedError ? (
+              <ClassifiedErrorCallout
+                error={classifiedError}
+                dataTestSubj="cwAlarmDetailClassifiedError"
+              />
+            ) : (
+              <EuiCallOut
+                color="danger"
+                iconType="alert"
+                title={i18n.translate('observability.alerting.cloudwatch.loadErrorTitle', {
+                  defaultMessage: 'Could not load alarm detail from CloudWatch',
+                })}
+              >
+                <p>{error.message}</p>
+                <p>
+                  {i18n.translate('observability.alerting.cloudwatch.loadErrorHint', {
+                    defaultMessage:
+                      'Check that the server has valid AWS credentials and cloudwatch:DescribeAlarms permission, then reopen this alarm.',
+                  })}
+                </p>
+              </EuiCallOut>
+            )}
+            <EuiSpacer size="s" />
+            <EuiButton
+              size="s"
+              iconType="refresh"
+              onClick={retry}
+              data-test-subj="cwAlarmDetailRetry"
+            >
+              {i18n.translate('observability.alerting.cloudwatch.loadErrorRetry', {
+                defaultMessage: 'Retry',
               })}
-            </p>
-          </EuiCallOut>
+            </EuiButton>
+          </>
         )}
 
         {!isLoading && detail && (
@@ -714,11 +767,16 @@ function renderStateHistory(history?: CloudWatchAlarmHistoryItem[]): React.React
 }
 
 function renderAlarmActions(alarm: CloudWatchAlarm): React.ReactNode {
-  const rows: Array<{ title: string; description: string }> = [];
-  (alarm.alarmActions || []).forEach((a) => rows.push({ title: 'On ALARM', description: a }));
-  (alarm.okActions || []).forEach((a) => rows.push({ title: 'On OK', description: a }));
+  // SNS topic ARNs are long unbroken strings — force them to wrap so they
+  // never overflow the flyout's description-list column.
+  const arn = (a: string): React.ReactElement => (
+    <span style={{ overflowWrap: 'anywhere' }}>{a}</span>
+  );
+  const rows: Array<{ title: string; description: React.ReactElement }> = [];
+  (alarm.alarmActions || []).forEach((a) => rows.push({ title: 'On ALARM', description: arn(a) }));
+  (alarm.okActions || []).forEach((a) => rows.push({ title: 'On OK', description: arn(a) }));
   (alarm.insufficientDataActions || []).forEach((a) =>
-    rows.push({ title: 'On INSUFFICIENT_DATA', description: a })
+    rows.push({ title: 'On INSUFFICIENT_DATA', description: arn(a) })
   );
   if (rows.length === 0) {
     return (
@@ -729,7 +787,15 @@ function renderAlarmActions(alarm: CloudWatchAlarm): React.ReactNode {
       </EuiTextColor>
     );
   }
-  return <EuiDescriptionList type="column" compressed listItems={rows} />;
+  // Cast: the plugin-local and OSD-root @types/react disagree on ReactNode,
+  // so EUI's NonNullable<ReactNode> rejects our (non-null) elements.
+  return (
+    <EuiDescriptionList
+      type="column"
+      compressed
+      listItems={rows as React.ComponentProps<typeof EuiDescriptionList>['listItems']}
+    />
+  );
 }
 
 function renderMetricBody(
@@ -861,7 +927,7 @@ function renderMetricBody(
                 <EuiFlexItem grow={false}>
                   <EuiBadge color="#E0D6FB">Composite</EuiBadge>
                 </EuiFlexItem>
-                <EuiFlexItem grow={false}>
+                <EuiFlexItem grow={false} style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
                   <EuiLink onClick={() => onOpen(p)}>{p.alarmName}</EuiLink>
                 </EuiFlexItem>
                 <EuiFlexItem grow={false}>

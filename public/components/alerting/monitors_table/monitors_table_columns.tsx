@@ -24,6 +24,7 @@ import {
   EuiFlexItem,
   EuiHealth,
   EuiTextColor,
+  EuiToolTip,
 } from '@elastic/eui';
 import { i18n } from '@osd/i18n';
 import {
@@ -39,6 +40,7 @@ import {
   isForecasterRule,
   SEVERITY_COLORS,
   STATUS_COLORS,
+  STATUS_DISPLAY_LABELS,
   TYPE_LABELS,
 } from '../shared_constants';
 import { DEFAULT_WIDTHS } from './resizable_columns';
@@ -220,17 +222,40 @@ export function buildTableColumns({
         width: w('status'),
         render: (s: MonitorStatus, item: UnifiedRuleSummary) => {
           const cw = item.cloudWatch;
-          const unifiedLabel = cw && cw.state === 'INSUFFICIENT_DATA' ? 'insufficient data' : s;
+          const unifiedLabel = STATUS_DISPLAY_LABELS[s] || s;
+          // Long values ("insufficient data", "CW: INSUFFICIENT_DATA") must
+          // not overflow the (user-resizable) status column: both the health
+          // label and the CW badge truncate with an ellipsis, and the full
+          // text stays reachable via tooltip.
+          const truncate: React.CSSProperties = {
+            display: 'block',
+            maxWidth: '100%',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          };
           return (
-            <EuiFlexGroup gutterSize="xs" alignItems="center" responsive={false} wrap>
-              <EuiFlexItem grow={false}>
-                <EuiHealth color={STATUS_COLORS[s] || 'subdued'}>{unifiedLabel}</EuiHealth>
+            <EuiFlexGroup
+              gutterSize="xs"
+              alignItems="center"
+              responsive={false}
+              wrap
+              style={{ minWidth: 0 }}
+            >
+              <EuiFlexItem grow={false} style={{ maxWidth: '100%', minWidth: 0 }}>
+                <EuiHealth color={STATUS_COLORS[s] || 'subdued'}>
+                  <span style={truncate} title={unifiedLabel}>
+                    {unifiedLabel}
+                  </span>
+                </EuiHealth>
               </EuiFlexItem>
               {cw && (
-                <EuiFlexItem grow={false}>
-                  <EuiBadge color={CLOUDWATCH_STATE_BADGE_COLOR[cw.state] || 'hollow'}>
-                    CW: {cw.state}
-                  </EuiBadge>
+                <EuiFlexItem grow={false} style={{ maxWidth: '100%', minWidth: 0 }}>
+                  <EuiToolTip content={`CloudWatch state: ${cw.state}`}>
+                    <EuiBadge color={CLOUDWATCH_STATE_BADGE_COLOR[cw.state] || 'hollow'}>
+                      <span style={truncate}>CW: {cw.state}</span>
+                    </EuiBadge>
+                  </EuiToolTip>
                 </EuiFlexItem>
               )}
             </EuiFlexGroup>

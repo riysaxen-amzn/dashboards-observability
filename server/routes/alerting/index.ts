@@ -38,6 +38,7 @@ import {
   type CloudWatchDatasourceConfig,
 } from '../../services/alerting/saved_object_datasource_service';
 import { registerAlertingMutationRoutes } from './mutations';
+import { classifyToHandlerResult } from './classified_error';
 import { toErrorBody, toHandlerResult } from './route_utils';
 import { isAlertManagerError } from '../../services/alerting';
 import {
@@ -362,6 +363,33 @@ export function registerAlertingRoutes(router: IRouter, deps: AlertingRoutesDeps
       return sendResult(res, result, okStatus);
     } catch (e: unknown) {
       const result = toHandlerResult(e, logger);
+      return sendResult(res, result, okStatus);
+    }
+  }
+
+  /**
+   * Like `runHandler`, but funnels failures through the error-classification
+   * boundary (`classifyToHandlerResult`) so the response carries a structured
+   * `errorDetail` (failure class + remediation + safe diagnostics) alongside
+   * the legacy `error` string. Used by the CloudWatch detail routes, where an
+   * auth/region failure should surface as a named failure class in the UI
+   * rather than a generic message. `sourceType` is threaded to classifiers so
+   * transport-level failures (DNS, connection refused) can be attributed to
+   * the right provider.
+   */
+  async function runClassifiedHandler(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    res: any,
+    operation: string,
+    sourceType: string,
+    produce: () => Promise<{ status: number; body: any }>,
+    okStatus: number = 200
+  ) {
+    try {
+      const result = await produce();
+      return sendResult(res, result, okStatus);
+    } catch (e: unknown) {
+      const result = classifyToHandlerResult(e, { operation, logger, sourceType });
       return sendResult(res, result, okStatus);
     }
   }
@@ -855,7 +883,7 @@ export function registerAlertingRoutes(router: IRouter, deps: AlertingRoutesDeps
       },
     },
     async (ctx, req, res) =>
-      runHandler(res, async () => {
+      runClassifiedHandler(res, 'cloudwatch.alarm.detail', 'cloudwatch', async () => {
         const { cwBackend, ds } = await resolveCloudWatch(
           ctx as AlertingHandlerContext,
           req.params.dsId
@@ -876,7 +904,7 @@ export function registerAlertingRoutes(router: IRouter, deps: AlertingRoutesDeps
       },
     },
     async (ctx, req, res) =>
-      runHandler(res, async () => {
+      runClassifiedHandler(res, 'cloudwatch.alarm.history', 'cloudwatch', async () => {
         const { cwBackend, ds } = await resolveCloudWatch(
           ctx as AlertingHandlerContext,
           req.params.dsId
@@ -895,7 +923,7 @@ export function registerAlertingRoutes(router: IRouter, deps: AlertingRoutesDeps
       },
     },
     async (ctx, req, res) =>
-      runHandler(res, async () => {
+      runClassifiedHandler(res, 'cloudwatch.alarm.relationships', 'cloudwatch', async () => {
         const { cwBackend, ds } = await resolveCloudWatch(
           ctx as AlertingHandlerContext,
           req.params.dsId

@@ -15,6 +15,7 @@
 import type { OSAlert, OSMonitor } from './opensearch_types';
 import type { PromAlert, PromAlertingRule } from './prometheus_types';
 import type { CloudWatchAlarmState, CloudWatchAlarmType } from './cloudwatch_types';
+import type { ClassifiedError } from '../../error';
 
 /**
  * Known fallback reasons a backend may surface through
@@ -202,6 +203,13 @@ export interface DatasourceWarning {
   datasourceName: string;
   datasourceType: DatasourceType;
   error: string;
+  /**
+   * Structured classification of the failure (client-safe payload), when the
+   * error-classification layer recognized it. Lets the UI name the failure
+   * class (e.g. expired AWS session) with remediation instead of echoing the
+   * raw message. Absent for unclassified (UNKNOWN) failures.
+   */
+  errorDetail?: ClassifiedError;
 }
 
 export interface PaginatedResponse<T> {
@@ -243,7 +251,7 @@ export interface DatasourceService {
 
 export type UnifiedAlertSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type UnifiedAlertState =
-  'active' | 'pending' | 'acknowledged' | 'silenced' | 'resolved' | 'error';
+  'active' | 'pending' | 'insufficient_data' | 'acknowledged' | 'silenced' | 'resolved' | 'error';
 export type UnifiedAlertKind = 'alert' | 'anomaly';
 
 /** Lightweight alert representation for list views and tables. */
@@ -298,6 +306,7 @@ export type MonitorType =
 export type MonitorStatus =
   | 'active'
   | 'pending'
+  | 'insufficient_data'
   | 'muted'
   | 'disabled'
   | 'Running'
@@ -417,6 +426,8 @@ export interface DatasourceFetchResult<T> {
   status: DatasourceFetchStatus;
   data: T[];
   error?: string;
+  /** Structured failure classification (client-safe). See DatasourceWarning. */
+  errorDetail?: ClassifiedError;
   durationMs: number;
   /**
    * Set by the OpenSearch backend when the post-fetch time-range filter
