@@ -1131,14 +1131,16 @@ export function promRuleToUnified(
 /** Map a CloudWatch alarm state to the unified monitor status used by rows. */
 export function cloudWatchStateToMonitorStatus(state: CloudWatchAlarmState): MonitorStatus {
   if (state === 'ALARM') return 'active';
-  if (state === 'INSUFFICIENT_DATA') return 'pending';
+  // Distinct unified status (not `pending`): insufficient data means the alarm
+  // cannot evaluate, which users filter for separately from Prom-style pending.
+  if (state === 'INSUFFICIENT_DATA') return 'insufficient_data';
   return 'muted'; // OK — steady state, rendered subdued like a non-firing rule
 }
 
 /** Map a CloudWatch alarm state to a unified alert state (Alerts tab). */
 export function cloudWatchStateToAlertState(state: CloudWatchAlarmState): UnifiedAlertState {
   if (state === 'ALARM') return 'active';
-  if (state === 'INSUFFICIENT_DATA') return 'pending';
+  if (state === 'INSUFFICIENT_DATA') return 'insufficient_data';
   return 'resolved';
 }
 

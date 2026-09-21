@@ -14,8 +14,10 @@
  * flyout gets one payload with per-section presence flags — a single slow AWS
  * call can't blank the flyout.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CloudWatchAlarmDetail } from '../../../../common/types/alerting';
+import type { ClassifiedError } from '../../../../common/error';
+import { extractClassifiedError } from '../../common/error';
 import { AlertingOpenSearchService } from '../query_services/alerting_opensearch_service';
 
 export interface UseCloudWatchAlarmDetailParams {
@@ -27,6 +29,15 @@ export interface UseCloudWatchAlarmDetailResult {
   detail: CloudWatchAlarmDetail | null;
   isLoading: boolean;
   error: Error | null;
+  /**
+   * Structured classification of the failure when the server attached one
+   * (`errorDetail` from the classified CloudWatch routes) — names the failure
+   * class (expired session, missing permission, unreachable region, …) with
+   * remediation and safe diagnostics. Null when the error is unclassified.
+   */
+  classifiedError: ClassifiedError | null;
+  /** Re-run the fetch (Retry button in the flyout's error state). */
+  retry: () => void;
 }
 
 export function useCloudWatchAlarmDetail({
@@ -37,6 +48,10 @@ export function useCloudWatchAlarmDetail({
   const [detail, setDetail] = useState<CloudWatchAlarmDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  const [classifiedError, setClassifiedError] = useState<ClassifiedError | null>(null);
+  const [attempt, setAttempt] = useState(0);
+
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,6 +59,7 @@ export function useCloudWatchAlarmDetail({
     setDetail(null);
     setIsLoading(true);
     setError(null);
+    setClassifiedError(null);
     service
       .getCloudWatchAlarmDetail(dsId, alarmName, { signal: controller.signal })
       .then((data: CloudWatchAlarmDetail) => {
@@ -53,6 +69,7 @@ export function useCloudWatchAlarmDetail({
         if (cancelled) return;
 
         console.error('Failed to load CloudWatch alarm detail:', err);
+        setClassifiedError(extractClassifiedError(err));
         setError(err instanceof Error ? err : new Error(String(err)));
       })
       .finally(() => {
@@ -62,7 +79,7 @@ export function useCloudWatchAlarmDetail({
       cancelled = true;
       controller.abort();
     };
-  }, [dsId, alarmName, service]);
+  }, [dsId, alarmName, service, attempt]);
 
-  return { detail, isLoading, error };
+  return { detail, isLoading, error, classifiedError, retry };
 }

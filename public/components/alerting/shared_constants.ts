@@ -41,6 +41,7 @@ export const SEVERITY_COLORS: Record<string, string> = {
 export const STATE_COLORS: Record<string, string> = {
   active: 'danger',
   pending: 'warning',
+  insufficient_data: 'warning',
   acknowledged: 'primary',
   silenced: 'default',
   resolved: 'success',
@@ -57,6 +58,7 @@ export const STATE_COLORS: Record<string, string> = {
 export const STATUS_COLORS: Record<string, string> = {
   active: 'danger',
   pending: 'warning',
+  insufficient_data: 'warning',
   muted: 'default',
   disabled: 'subdued',
   Running: 'success',
