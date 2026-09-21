@@ -102,7 +102,9 @@ export function setupRoutes({
   // at server start (like the OS/Prom backends) when the virtual datasource is
   // enabled. Credentials come from the ambient AWS provider chain at call time,
   // so constructing this never touches AWS.
-  const cwEnabled = cloudWatch?.enabled ?? true;
+  // Experimental — fail dark: absent config reads as disabled, matching the
+  // schema default in server/index.ts.
+  const cwEnabled = cloudWatch?.enabled ?? false;
   const cwBackend = cwEnabled
     ? new CloudWatchBackend(
         logger,
