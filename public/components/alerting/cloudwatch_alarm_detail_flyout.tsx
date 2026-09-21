@@ -23,6 +23,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   EuiBadge,
+  EuiBetaBadge,
   EuiButton,
   EuiButtonEmpty,
   EuiCallOut,
@@ -617,6 +618,20 @@ export const CloudWatchAlarmDetailFlyout: React.FC<CloudWatchAlarmDetailFlyoutPr
                 <EuiBadge color={alarmType === 'composite' ? '#E0D6FB' : 'hollow'}>
                   {alarmType === 'composite' ? 'Composite' : 'Metric'}
                 </EuiBadge>
+              </EuiFlexItem>
+              <EuiFlexItem grow={false}>
+                <EuiBetaBadge
+                  label={i18n.translate('observability.alerting.cloudwatch.experimentalBadge', {
+                    defaultMessage: 'Experimental',
+                  })}
+                  tooltipContent={i18n.translate(
+                    'observability.alerting.cloudwatch.experimentalTooltip',
+                    {
+                      defaultMessage:
+                        'CloudWatch alarms support is experimental and may change or be removed in a future release.',
+                    }
+                  )}
+                />
               </EuiFlexItem>
             </EuiFlexGroup>
           </EuiFlexItem>

@@ -410,7 +410,9 @@ export class ObservabilityPlugin implements Plugin<
       dataSourceEnabled,
       logger: this.logger,
       cloudWatch: {
-        enabled: observabilityConfig.cloudwatch?.enabled ?? true,
+        // Experimental — fail dark: absent config reads as disabled, matching
+        // the schema default.
+        enabled: observabilityConfig.cloudwatch?.enabled ?? false,
         region: observabilityConfig.cloudwatch?.defaultRegion ?? 'us-east-1',
       },
     });

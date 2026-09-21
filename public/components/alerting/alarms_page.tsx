@@ -25,7 +25,7 @@
  *   - `AlertManagerEndTime`   — date-math string for picker end.
  */
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { EuiLink, EuiTab, EuiTabs } from '@elastic/eui';
+import { EuiCallOut, EuiLink, EuiSpacer, EuiTab, EuiTabs } from '@elastic/eui';
 import { i18n } from '@osd/i18n';
 import { FormattedMessage } from '@osd/i18n/react';
 import { toMountPoint } from '../../../../../src/plugins/opensearch_dashboards_react/public';
@@ -1749,6 +1749,14 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({
     return Array.from(byId.values());
   }, [alertsWarnings, rulesWarnings, alertingAvailability, datasources]);
 
+  // Experimental-feature banner for the opt-in CloudWatch alarms datasource.
+  // Shown only when the operator enabled it (a `cloudwatch` datasource is
+  // present); dismissal lasts for the page session.
+  const [cwBannerDismissed, setCwBannerDismissed] = useState(false);
+  const dismissCloudWatchExperimentalBanner = useCallback(() => setCwBannerDismissed(true), []);
+  const showCloudWatchExperimentalBanner =
+    !cwBannerDismissed && datasources.some((d) => d.type === 'cloudwatch');
+
   const datasourceErrorMapByName = useMemo(() => {
     const m: Record<string, string> = {};
     for (const issue of datasourceIssues) {
@@ -1811,6 +1819,33 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({
           </EuiTab>
         ))}
       </EuiTabs>
+      {/* CloudWatch alarms are an experimental, opt-in datasource
+          (`observability.cloudwatch.enabled`). Banner renders only when the
+          operator enabled it, and stays dismissed for the session. */}
+      {showCloudWatchExperimentalBanner && (
+        <>
+          <EuiSpacer size="s" />
+          <EuiCallOut
+            size="s"
+            color="warning"
+            iconType="beaker"
+            data-test-subj="cloudWatchExperimentalCallout"
+            title={i18n.translate(
+              'observability.alerting.alarmsPage.cloudwatchExperimental.title',
+              {
+                defaultMessage: 'CloudWatch alarms support is experimental',
+              }
+            )}
+            dismissible
+            onDismiss={dismissCloudWatchExperimentalBanner}
+          >
+            <FormattedMessage
+              id="observability.alerting.alarmsPage.cloudwatchExperimental.body"
+              defaultMessage="Amazon CloudWatch alarms shown in this view are an experimental feature and may change or be removed in a future release. Alarm data is read-only."
+            />
+          </EuiCallOut>
+        </>
+      )}
 
       <div aria-live="polite" className="euiScreenReaderOnly">
         <FormattedMessage
