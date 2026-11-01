@@ -126,6 +126,29 @@ function fromInput(input: CloudWatchMetricAlarmInput): FormState {
 
 const toNumber = (value: string) => (value.trim() === '' ? NaN : Number(value));
 
+/** Text typed into a combo box but not yet committed with Enter, by field. */
+export type PendingText = Partial<
+  Record<'namespace' | 'metricName' | 'alarmActions' | 'okActions', string>
+>;
+
+/**
+ * The form with typed-but-uncommitted combo-box text applied. A combo box only takes typed text
+ * on Enter, so without this a value typed and then left (or saved straight away) would be
+ * dropped and the old one kept. Exported for tests.
+ */
+export function withPendingText(form: FormState, pending: PendingText): FormState {
+  const next = { ...form };
+  const ns = pending.namespace?.trim();
+  if (ns) next.namespace = ns;
+  const metric = pending.metricName?.trim();
+  if (metric) next.metricName = metric;
+  for (const field of ['alarmActions', 'okActions'] as const) {
+    const arn = pending[field]?.trim();
+    if (arn && !next[field].includes(arn)) next[field] = [...next[field], arn];
+  }
+  return next;
+}
+
 /** The write input for the form. Exported for tests. */
 export function toInput(form: FormState, mode: 'create' | 'edit'): CloudWatchMetricAlarmInput {
   const input: CloudWatchMetricAlarmInput = {
@@ -208,6 +231,14 @@ export const CreateCloudWatchAlarm: React.FC<CreateCloudWatchAlarmProps> = ({
   const [serverError, setServerError] = useState<ClassifiedError | string>();
   const [metrics, setMetrics] = useState<CloudWatchMetricRef[]>([]);
   const [metricsUnavailable, setMetricsUnavailable] = useState(false);
+  const [pending, setPending] = useState<PendingText>({});
+  const typing = (field: keyof PendingText) => (value: string) =>
+    setPending((prev) => ({ ...prev, [field]: value }));
+  // Leaving a combo box keeps what was typed in it.
+  const commitTyped = (field: keyof PendingText) => () => {
+    setForm((prev) => withPendingText(prev, { [field]: pending[field] }));
+    setPending((prev) => ({ ...prev, [field]: undefined }));
+  };
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -228,7 +259,8 @@ export const CreateCloudWatchAlarm: React.FC<CreateCloudWatchAlarmProps> = ({
     };
   }, [dsId, form.namespace]);
 
-  const input = useMemo(() => toInput(form, mode), [form, mode]);
+  // Typed text counts even before the combo box is left (e.g. Save clicked right away).
+  const input = useMemo(() => toInput(withPendingText(form, pending), mode), [form, pending, mode]);
   const validation = useMemo(() => validateCloudWatchMetricAlarm(input), [input]);
   const nameTaken =
     mode === 'create' && existingNames.includes(input.alarmName) && input.alarmName !== '';
@@ -282,6 +314,9 @@ export const CreateCloudWatchAlarm: React.FC<CreateCloudWatchAlarmProps> = ({
     setTouched(true);
     setServerError(undefined);
     setServerFieldError(undefined);
+    // Keep the typed text in the form too, so it shows what was saved.
+    setForm((prev) => withPendingText(prev, pending));
+    setPending({});
     if (!validation.valid || nameTaken) return;
     setSaving(true);
     try {
@@ -319,7 +354,10 @@ export const CreateCloudWatchAlarm: React.FC<CreateCloudWatchAlarmProps> = ({
         onCreateOption={(value) => {
           const arn = value.trim();
           if (arn && !form[field].includes(arn)) set(field, [...form[field], arn]);
+          setPending((prev) => ({ ...prev, [field]: undefined }));
         }}
+        onSearchChange={typing(field)}
+        onBlur={commitTyped(field)}
         onChange={(opts: Array<EuiComboBoxOptionOption<string>>) =>
           set(
             field,
@@ -440,8 +478,13 @@ export const CreateCloudWatchAlarm: React.FC<CreateCloudWatchAlarmProps> = ({
                   placeholder="AWS/EC2"
                   options={namespaceOptions}
                   selectedOptions={form.namespace ? [{ label: form.namespace }] : []}
-                  onCreateOption={(v) => set('namespace', v.trim())}
+                  onCreateOption={(v) => {
+                    set('namespace', v.trim());
+                    setPending((prev) => ({ ...prev, namespace: undefined }));
+                  }}
                   onChange={(opts) => set('namespace', opts[0]?.label ?? '')}
+                  onSearchChange={typing('namespace')}
+                  onBlur={commitTyped('namespace')}
                   data-test-subj="cloudWatchAlarm-namespace"
                 />
               </EuiFormRow>
@@ -458,8 +501,13 @@ export const CreateCloudWatchAlarm: React.FC<CreateCloudWatchAlarmProps> = ({
                   placeholder="CPUUtilization"
                   options={metricOptions}
                   selectedOptions={form.metricName ? [{ label: form.metricName }] : []}
-                  onCreateOption={(v) => set('metricName', v.trim())}
+                  onCreateOption={(v) => {
+                    set('metricName', v.trim());
+                    setPending((prev) => ({ ...prev, metricName: undefined }));
+                  }}
                   onChange={(opts) => (opts[0] ? pickMetric(opts[0].label) : set('metricName', ''))}
+                  onSearchChange={typing('metricName')}
+                  onBlur={commitTyped('metricName')}
                   data-test-subj="cloudWatchAlarm-metricName"
                 />
               </EuiFormRow>

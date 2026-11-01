@@ -13,7 +13,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { I18nProvider } from '@osd/i18n/react';
 import type { CloudWatchAlarmDetail } from '../../../../common/types/alerting';
 import { coreRefs } from '../../../framework/core_refs';
-import { CreateCloudWatchAlarm, toInput } from '../create_cloudwatch_alarm';
+import { CreateCloudWatchAlarm, toInput, withPendingText } from '../create_cloudwatch_alarm';
 import { CloudWatchAlarmDetailFlyout } from '../cloudwatch_alarm_detail_flyout';
 import { useCloudWatchAlarmDetail } from '../hooks/use_cloudwatch_alarm_detail';
 import * as client from '../mutations/cloudwatch_alarm_client';
@@ -299,5 +299,60 @@ describe('CloudWatchAlarmDetailFlyout write actions', () => {
     );
     expect(onChanged).toHaveBeenCalledWith('deleted');
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe('CreateCloudWatchAlarm typed combo-box text', () => {
+  it('applies typed namespace, metric and topic text that was never committed with Enter', () => {
+    const base = {
+      alarmName: 'a',
+      description: '',
+      namespace: 'AWS/AOSS',
+      metricName: '4xx',
+      dimensions: [],
+      statistic: 'Average' as const,
+      percentile: 'p99',
+      period: '60',
+      evaluationPeriods: '1',
+      datapointsToAlarm: '',
+      comparisonOperator: 'GreaterThanThreshold' as const,
+      threshold: '1',
+      treatMissingData: 'missing' as const,
+      actionsEnabled: true,
+      alarmActions: [],
+      okActions: [],
+      tags: [],
+    };
+    const topic = 'arn:aws:sns:us-west-2:123456789012:oncall';
+    expect(
+      withPendingText(base, {
+        namespace: ' OSUI/Test ',
+        metricName: 'Latency',
+        alarmActions: topic,
+      })
+    ).toMatchObject({ namespace: 'OSUI/Test', metricName: 'Latency', alarmActions: [topic] });
+    expect(withPendingText(base, { namespace: '  ' }).namespace).toBe('AWS/AOSS');
+  });
+
+  it('saves the typed namespace and metric when Save is clicked without pressing Enter', async () => {
+    withIntl(
+      <CreateCloudWatchAlarm
+        dsId="cloudwatch"
+        initial={editInput}
+        onClose={jest.fn()}
+        onSaved={jest.fn()}
+      />
+    );
+    const nsInput = screen.getByTestId('cloudWatchAlarm-namespace').querySelector('input')!;
+    fireEvent.change(nsInput, { target: { value: 'OSUI/Test' } });
+    const metricInput = screen.getByTestId('cloudWatchAlarm-metricName').querySelector('input')!;
+    fireEvent.change(metricInput, { target: { value: 'Latency' } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('cloudWatchAlarm-save'));
+    });
+    expect(mocked.updateCloudWatchAlarm).toHaveBeenCalledWith(
+      'cloudwatch',
+      expect.objectContaining({ namespace: 'OSUI/Test', metricName: 'Latency' })
+    );
   });
 });
