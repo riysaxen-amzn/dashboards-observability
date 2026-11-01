@@ -872,6 +872,14 @@ export class ObservabilityPlugin implements Plugin<
       core.application.capabilities.observability as
         { cloudWatchAlarmsEnabled?: boolean } | undefined
     )?.cloudWatchAlarmsEnabled;
+    // Create, edit and delete for CloudWatch alarms: set only when the writes flag is on and the
+    // source can write. The server enforces it too; this only decides what the UI offers.
+    coreRefs.cloudwatchWritesEnabled =
+      coreRefs.cloudwatchEnabled &&
+      !!(
+        core.application.capabilities.observability as
+          { cloudWatchAlarmWritesEnabled?: boolean } | undefined
+      )?.cloudWatchAlarmWritesEnabled;
     // Resolved from the dynamic-config-backed capability so AppConfig flips
     // take effect on the next page load. Components
     // (`apm/pages/services_home`, `apm/pages/service_details`) read this ref.

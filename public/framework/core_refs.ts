@@ -36,6 +36,8 @@ class CoreRefs {
   public summarizeEnabled?: boolean;
   public sloEnabled?: boolean;
   public cloudwatchEnabled?: boolean;
+  /** Whether this request may create, edit and delete CloudWatch alarms (server-resolved). */
+  public cloudwatchWritesEnabled?: boolean;
   public dashboard?: DashboardStart;
   public dashboardProviders?: unknown;
   public overlays?: OverlayStart;

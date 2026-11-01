@@ -31,6 +31,8 @@ import {
 } from '@elastic/eui';
 import { i18n } from '@osd/i18n';
 import { FormattedMessage } from '@osd/i18n/react';
+import { coreRefs } from '../../../framework/core_refs';
+import type { CloudWatchMetricAlarmInput } from '../../../../common/types/alerting';
 import { UnifiedRuleSummary } from '../../../../common/types/alerting';
 import { DeleteModal } from '../../common/helpers/delete_modal';
 import { CloudWatchAlarmDetailFlyout } from '../cloudwatch_alarm_detail_flyout';
@@ -71,7 +73,9 @@ export interface MonitorsMainPanelProps {
   setSelectedIds: React.Dispatch<React.SetStateAction<Set<string>>>;
 
   // Create
-  onCreateMonitor?: (type: 'logs' | 'prometheus' | 'metrics' | 'detector' | 'forecaster') => void;
+  onCreateMonitor?: (
+    type: 'logs' | 'prometheus' | 'metrics' | 'cloudwatch' | 'detector' | 'forecaster'
+  ) => void;
   /** Manually refetch the rules list. Renders a Refresh button when provided. */
   onRefresh?: () => void;
   /** True while a refetch is in flight — shows the Refresh button spinner. */
@@ -121,6 +125,10 @@ export interface MonitorsMainPanelProps {
   onClone?: (monitor: UnifiedRuleSummary) => void;
   onEdit?: (monitor: UnifiedRuleSummary) => void;
   onEditDetectorSettings?: (detector: UnifiedRuleSummary) => void;
+  /** Open the edit form for a CloudWatch alarm (only offered when CloudWatch writes are on). */
+  onEditCloudWatchAlarm?: (input: CloudWatchMetricAlarmInput) => void;
+  /** After a CloudWatch alarm was deleted or its notifications changed. */
+  onCloudWatchAlarmChanged?: () => void;
   onEditDetectorFeatures?: (detector: UnifiedRuleSummary) => void;
   onEditForecaster?: (forecaster: UnifiedRuleSummary) => void;
   onStartResources?: (resources: UnifiedRuleSummary[]) => Promise<void> | void;
@@ -178,6 +186,8 @@ export const MonitorsMainPanel: React.FC<MonitorsMainPanelProps> = ({
   onClone,
   onEdit,
   onEditDetectorSettings,
+  onEditCloudWatchAlarm,
+  onCloudWatchAlarmChanged,
   onEditDetectorFeatures,
   onEditForecaster,
   onStartResources,
@@ -406,6 +416,24 @@ export const MonitorsMainPanel: React.FC<MonitorsMainPanelProps> = ({
                             defaultMessage: 'Create metrics rule',
                           }
                         )}
+                      />
+                    )}
+                    {/* Offered only when the server allows CloudWatch writes for this request. */}
+                    {coreRefs.cloudwatchWritesEnabled && (
+                      <EuiListGroupItem
+                        label={i18n.translate(
+                          'observability.alerting.monitorsTable.mainPanel.cloudWatchOption',
+                          { defaultMessage: 'CloudWatch alarm' }
+                        )}
+                        onClick={() => {
+                          setShowCreatePopover(false);
+                          onCreateMonitor('cloudwatch');
+                        }}
+                        aria-label={i18n.translate(
+                          'observability.alerting.monitorsTable.mainPanel.createCloudWatchAriaLabel',
+                          { defaultMessage: 'Create CloudWatch alarm' }
+                        )}
+                        data-test-subj="createCloudWatchAlarmOption"
                       />
                     )}
                     {detectorCreateDisabled ? (
@@ -779,6 +807,15 @@ export const MonitorsMainPanel: React.FC<MonitorsMainPanelProps> = ({
           rule={selectedMonitor}
           timeRange={rulesWindow}
           onClose={() => setSelectedMonitor(null)}
+          onEdit={
+            onEditCloudWatchAlarm
+              ? (input) => {
+                  setSelectedMonitor(null);
+                  onEditCloudWatchAlarm(input);
+                }
+              : undefined
+          }
+          onChanged={onCloudWatchAlarmChanged ? () => onCloudWatchAlarmChanged() : undefined}
         />
       ) : selectedMonitor && isDetectorDefinition(selectedMonitor) ? (
         <DetectorDetailFlyout

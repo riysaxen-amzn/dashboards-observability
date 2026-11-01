@@ -34,6 +34,8 @@ import {
   EuiFlexItem,
   EuiFlyout,
   EuiFlyoutBody,
+  EuiConfirmModal,
+  EuiFlyoutFooter,
   EuiFlyoutHeader,
   EuiHealth,
   EuiHorizontalRule,
@@ -63,6 +65,18 @@ import type {
 import { EchartsRender } from './echarts_render';
 import { ClassifiedErrorCallout } from '../common/error';
 import { useCloudWatchAlarmDetail } from './hooks/use_cloudwatch_alarm_detail';
+import type { CloudWatchMetricAlarmInput } from '../../../common/types/alerting';
+import {
+  cloudWatchAlarmEditBlocker,
+  cloudWatchAlarmToInput,
+} from '../../../common/services/alerting/cloudwatch_alarm_validator';
+import { coreRefs } from '../../framework/core_refs';
+import { extractClassifiedError } from '../common/error';
+import { extractServerErrorMessage } from './alarms_page_helpers';
+import {
+  deleteCloudWatchAlarm,
+  setCloudWatchAlarmActionsEnabled,
+} from './mutations/cloudwatch_alarm_client';
 import { AlertingOpenSearchService } from './query_services/alerting_opensearch_service';
 import { SEVERITY_COLORS } from './shared_constants';
 import { formatTimestamp, localizeTimestampsInText } from './time_format';
@@ -101,6 +115,13 @@ export interface CloudWatchAlarmDetailFlyoutProps {
    * tab's time picker). Default: the last 24h as of opening. Memoize it: a new window refetches.
    */
   timeRange?: AlarmTimeWindow;
+  /**
+   * Open the edit form for this alarm. Offered only when CloudWatch writes are on and the form can
+   * reproduce the alarm (`cloudWatchAlarmEditBlocker`).
+   */
+  onEdit?: (input: CloudWatchMetricAlarmInput) => void;
+  /** After a delete or an actions change, so the list refetches. */
+  onChanged?: (change: 'deleted' | 'actions') => void;
 }
 
 // State → OUI health colour used consistently for dots/badges in this flyout.
@@ -575,7 +596,12 @@ export const CloudWatchAlarmDetailFlyout: React.FC<CloudWatchAlarmDetailFlyoutPr
   rule,
   onClose,
   timeRange,
+  onEdit,
+  onChanged,
 }) => {
+  const canWrite = !!coreRefs.cloudwatchWritesEnabled;
+  const [busy, setBusy] = useState<'delete' | 'actions' | undefined>();
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const dsId = rule.datasourceId;
   const defaultWindow = useMemo(() => defaultAlarmTimeWindow(), []);
   const timeWindow = timeRange ?? defaultWindow;
@@ -595,6 +621,71 @@ export const CloudWatchAlarmDetailFlyout: React.FC<CloudWatchAlarmDetailFlyoutPr
       startTime: new Date(timeWindow.startMs).toISOString(),
       endTime: new Date(timeWindow.endMs).toISOString(),
     });
+
+  // A failed write: the classified title and remediation when the server sent them.
+  const toastWriteError = (e: unknown, fallback: string) => {
+    const classified = extractClassifiedError(e);
+    coreRefs.toasts?.addDanger({
+      title: classified?.title ?? fallback,
+      text: classified?.remediation ?? classified?.message ?? extractServerErrorMessage(e),
+    });
+  };
+  const actionsEnabled = detail?.alarm.actionsEnabled !== false;
+  const editBlocker = detail ? cloudWatchAlarmEditBlocker(detail.alarm) : undefined;
+
+  const toggleActions = async () => {
+    setBusy('actions');
+    try {
+      await setCloudWatchAlarmActionsEnabled(dsId, alarmName, !actionsEnabled);
+      coreRefs.toasts?.addSuccess(
+        actionsEnabled
+          ? i18n.translate('observability.alerting.cloudwatch.actionsOffToast', {
+              defaultMessage: 'Notifications turned off for "{name}"',
+              values: { name: alarmName },
+            })
+          : i18n.translate('observability.alerting.cloudwatch.actionsOnToast', {
+              defaultMessage: 'Notifications turned on for "{name}"',
+              values: { name: alarmName },
+            })
+      );
+      retry();
+      onChanged?.('actions');
+    } catch (e) {
+      toastWriteError(
+        e,
+        i18n.translate('observability.alerting.cloudwatch.actionsFailed', {
+          defaultMessage: "Couldn't change the alarm's notifications",
+        })
+      );
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const doDelete = async () => {
+    setBusy('delete');
+    try {
+      await deleteCloudWatchAlarm(dsId, alarmName);
+      coreRefs.toasts?.addSuccess(
+        i18n.translate('observability.alerting.cloudwatch.deletedToast', {
+          defaultMessage: 'Deleted CloudWatch alarm "{name}"',
+          values: { name: alarmName },
+        })
+      );
+      onChanged?.('deleted');
+      onClose();
+    } catch (e) {
+      toastWriteError(
+        e,
+        i18n.translate('observability.alerting.cloudwatch.deleteFailed', {
+          defaultMessage: "Couldn't delete the alarm",
+        })
+      );
+    } finally {
+      setBusy(undefined);
+      setConfirmDelete(false);
+    }
+  };
 
   const openAlarm = useCallback<OpenAlarmFn>(
     (node) => {
@@ -743,19 +834,21 @@ export const CloudWatchAlarmDetailFlyout: React.FC<CloudWatchAlarmDetailFlyoutPr
                 />
               </EuiFlexItem>
               {/* The one place the flyout says it's read-only (no edit, ack or mute here). */}
-              <EuiFlexItem grow={false}>
-                <EuiToolTip
-                  content={i18n.translate('observability.alerting.cloudwatch.readOnlyTooltip', {
-                    defaultMessage: 'CloudWatch alarms are read-only in this view.',
-                  })}
-                >
-                  <EuiBadge color="hollow" data-test-subj="cwAlarmReadOnlyBadge">
-                    {i18n.translate('observability.alerting.cloudwatch.readOnly', {
-                      defaultMessage: 'Read-only',
+              {!canWrite && (
+                <EuiFlexItem grow={false}>
+                  <EuiToolTip
+                    content={i18n.translate('observability.alerting.cloudwatch.readOnlyTooltip', {
+                      defaultMessage: 'CloudWatch alarms are read-only in this view.',
                     })}
-                  </EuiBadge>
-                </EuiToolTip>
-              </EuiFlexItem>
+                  >
+                    <EuiBadge color="hollow" data-test-subj="cwAlarmReadOnlyBadge">
+                      {i18n.translate('observability.alerting.cloudwatch.readOnly', {
+                        defaultMessage: 'Read-only',
+                      })}
+                    </EuiBadge>
+                  </EuiToolTip>
+                </EuiFlexItem>
+              )}
             </EuiFlexGroup>
           </EuiFlexItem>
         </EuiFlexGroup>
@@ -880,6 +973,88 @@ export const CloudWatchAlarmDetailFlyout: React.FC<CloudWatchAlarmDetailFlyoutPr
           </>
         )}
       </EuiFlyoutBody>
+      {canWrite && detail && (
+        <EuiFlyoutFooter>
+          <EuiFlexGroup justifyContent="spaceBetween" responsive={false}>
+            <EuiFlexItem grow={false}>
+              <EuiButtonEmpty
+                color="danger"
+                iconType="trash"
+                isLoading={busy === 'delete'}
+                isDisabled={!!busy}
+                onClick={() => setConfirmDelete(true)}
+                data-test-subj="cwAlarmDelete"
+              >
+                {i18n.translate('observability.alerting.cloudwatch.delete', {
+                  defaultMessage: 'Delete',
+                })}
+              </EuiButtonEmpty>
+            </EuiFlexItem>
+            <EuiFlexItem grow={false}>
+              <EuiFlexGroup gutterSize="s" responsive={false}>
+                <EuiFlexItem grow={false}>
+                  <EuiButton
+                    isLoading={busy === 'actions'}
+                    isDisabled={!!busy}
+                    onClick={toggleActions}
+                    data-test-subj="cwAlarmToggleActions"
+                  >
+                    {actionsEnabled
+                      ? i18n.translate('observability.alerting.cloudwatch.actionsOff', {
+                          defaultMessage: 'Turn off notifications',
+                        })
+                      : i18n.translate('observability.alerting.cloudwatch.actionsOn', {
+                          defaultMessage: 'Turn on notifications',
+                        })}
+                  </EuiButton>
+                </EuiFlexItem>
+                {onEdit && (
+                  <EuiFlexItem grow={false}>
+                    <EuiToolTip content={editBlocker}>
+                      <EuiButton
+                        fill
+                        iconType="pencil"
+                        isDisabled={!!busy || !!editBlocker}
+                        onClick={() => onEdit(cloudWatchAlarmToInput(detail.alarm))}
+                        data-test-subj="cwAlarmEdit"
+                      >
+                        {i18n.translate('observability.alerting.cloudwatch.edit', {
+                          defaultMessage: 'Edit',
+                        })}
+                      </EuiButton>
+                    </EuiToolTip>
+                  </EuiFlexItem>
+                )}
+              </EuiFlexGroup>
+            </EuiFlexItem>
+          </EuiFlexGroup>
+        </EuiFlyoutFooter>
+      )}
+      {confirmDelete && (
+        <EuiConfirmModal
+          title={i18n.translate('observability.alerting.cloudwatch.deleteTitle', {
+            defaultMessage: 'Delete "{name}"?',
+            values: { name: alarmName },
+          })}
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={doDelete}
+          cancelButtonText={i18n.translate('observability.alerting.cloudwatch.deleteCancel', {
+            defaultMessage: 'Cancel',
+          })}
+          confirmButtonText={i18n.translate('observability.alerting.cloudwatch.deleteConfirm', {
+            defaultMessage: 'Delete alarm',
+          })}
+          buttonColor="danger"
+          isLoading={busy === 'delete'}
+        >
+          <p>
+            {i18n.translate('observability.alerting.cloudwatch.deleteBody', {
+              defaultMessage:
+                'This deletes the alarm in CloudWatch for everyone in this account. Composite alarms that use it will treat it as missing. This cannot be undone.',
+            })}
+          </p>
+        </EuiConfirmModal>
+      )}
     </EuiFlyout>
   );
 };

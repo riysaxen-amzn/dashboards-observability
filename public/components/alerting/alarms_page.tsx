@@ -50,6 +50,8 @@ import type { PrometheusFormState } from './create_monitor/create_monitor_types'
 import { CreateAdRuleFlyout, CreateAdRuleType } from './create_ad_rule_flyout';
 import { EditMonitor } from './create_monitor/edit_monitor';
 import { CreateMetricsMonitor, MetricsMonitorFormState } from './create_metrics_monitor';
+import { CreateCloudWatchAlarm } from './create_cloudwatch_alarm';
+import type { CloudWatchMetricAlarmInput } from '../../../common/types/alerting';
 import { AlertsDashboard } from './alerts_dashboard';
 import { AlertDetailFlyout } from './alert_detail_flyout';
 import { AnomalyDetailFlyout } from './anomaly_detail_flyout';
@@ -71,7 +73,12 @@ import { ALERT_MANAGER_MAX_DATASOURCES_SETTING } from '../../../common/constants
 import { transformPplFormToPayload } from '../../../common/services/alerting/form_transforms';
 import { PPL_MONITOR_NAME_MAX } from '../../../common/services/alerting/validators';
 import { showMonitorCreatedToast } from './toast_helpers';
-import { isAdResourceRunning, isDetectorRule, isForecasterRule } from './shared_constants';
+import {
+  CLOUDWATCH_DATASOURCE_ID,
+  isAdResourceRunning,
+  isDetectorRule,
+  isForecasterRule,
+} from './shared_constants';
 import './alerting.scss';
 
 /** sessionStorage key: the CloudWatch experimental banner was dismissed this session. */
@@ -583,6 +590,37 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({
   // to the OS variant via this override even if the parent-page selected
   // datasource happens to be Prometheus.
   const [createBackendType, setCreateBackendType] = useState<MonitorBackendType | null>(null);
+  // CloudWatch alarm form: `create` for a new one, or the alarm being edited.
+  const [cloudWatchForm, setCloudWatchForm] = useState<
+    { mode: 'create' } | { mode: 'edit'; input: CloudWatchMetricAlarmInput } | null
+  >(null);
+  const cloudWatchAlarmNames = useMemo(
+    () =>
+      rules
+        .filter((r) => r.datasourceType === 'cloudwatch')
+        .map((r) => r.cloudWatch?.alarmName ?? r.name),
+    [rules]
+  );
+  // CloudWatch writes are synchronous, and background polls skip CloudWatch, so a foreground
+  // refetch shows the change right away.
+  const handleCloudWatchAlarmSaved = useCallback(
+    (alarmName: string, mode: 'create' | 'edit') => {
+      setCloudWatchForm(null);
+      coreRefs.toasts?.addSuccess(
+        mode === 'create'
+          ? i18n.translate('observability.alerting.alarmsPage.toast.cloudWatchCreated', {
+              defaultMessage: 'Created CloudWatch alarm "{name}"',
+              values: { name: alarmName },
+            })
+          : i18n.translate('observability.alerting.alarmsPage.toast.cloudWatchUpdated', {
+              defaultMessage: 'Saved CloudWatch alarm "{name}"',
+              values: { name: alarmName },
+            })
+      );
+      refetchRules();
+    },
+    [refetchRules]
+  );
   const [createAdRuleType, setCreateAdRuleType] = useState<CreateAdRuleType | null>(null);
   const [editTarget, setEditTarget] = useState<{
     dsId: string;
@@ -1672,6 +1710,12 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({
           onClone={handleCloneRule}
           onEdit={(monitor) => setEditTarget({ dsId: monitor.datasourceId, ruleId: monitor.id })}
           onEditDetectorSettings={handleEditDetectorSettings}
+          onEditCloudWatchAlarm={
+            coreRefs.cloudwatchWritesEnabled
+              ? (input) => setCloudWatchForm({ mode: 'edit', input })
+              : undefined
+          }
+          onCloudWatchAlarmChanged={refetchRules}
           onEditDetectorFeatures={handleEditDetectorFeatures}
           onEditForecaster={handleEditForecaster}
           onStartResources={(resources) => handleAdResourceLifecycle(resources, 'start')}
@@ -1684,6 +1728,8 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({
             } else if (type === 'metrics') {
               setCreateBackendType('prometheus');
               setShowCreateMonitor(true);
+            } else if (type === 'cloudwatch') {
+              setCloudWatchForm({ mode: 'create' });
             } else if (type === 'detector' || type === 'forecaster') {
               handleCreateADResource(type);
             }
@@ -1881,10 +1927,17 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({
             dismissible
             onDismiss={dismissCloudWatchExperimentalBanner}
           >
-            <FormattedMessage
-              id="observability.alerting.alarmsPage.cloudwatchExperimental.body"
-              defaultMessage="Amazon CloudWatch alarms shown in this view are an experimental feature and may change or be removed in a future release. They're read-only here."
-            />
+            {coreRefs.cloudwatchWritesEnabled ? (
+              <FormattedMessage
+                id="observability.alerting.alarmsPage.cloudwatchExperimental.bodyWritable"
+                defaultMessage="Amazon CloudWatch alarms in this view are an experimental feature and may change or be removed in a future release. You can create, edit and delete metric alarms here; changes are made in CloudWatch with your own AWS permissions."
+              />
+            ) : (
+              <FormattedMessage
+                id="observability.alerting.alarmsPage.cloudwatchExperimental.body"
+                defaultMessage="Amazon CloudWatch alarms shown in this view are an experimental feature and may change or be removed in a future release. They're read-only here."
+              />
+            )}
           </EuiCallOut>
         </>
       )}
@@ -1899,6 +1952,15 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({
         />
       </div>
       {renderTable()}
+      {cloudWatchForm && (
+        <CreateCloudWatchAlarm
+          dsId={CLOUDWATCH_DATASOURCE_ID}
+          initial={cloudWatchForm.mode === 'edit' ? cloudWatchForm.input : undefined}
+          existingNames={cloudWatchAlarmNames}
+          onClose={() => setCloudWatchForm(null)}
+          onSaved={handleCloudWatchAlarmSaved}
+        />
+      )}
       {/* Metrics rules use the SAME flyout component as the Metrics Explore
           page ("Create alert rule" action) so the two surfaces can never
           drift. It persists the rule itself; handleMetricsRuleSaved only

@@ -19,6 +19,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EuiResizableContainer } from '@elastic/eui';
+import type { CloudWatchMetricAlarmInput } from '../../../../common/types/alerting';
 import { Datasource, UnifiedRuleSummary } from '../../../../common/types/alerting';
 import { useFacetCollapse } from '../facet_filter_panel';
 import { isStandardOpenSearchDatasource } from '../shared_constants';
@@ -50,6 +51,10 @@ interface MonitorsTableProps {
   onClone?: (monitor: UnifiedRuleSummary) => void;
   onEdit?: (monitor: UnifiedRuleSummary) => void;
   onEditDetectorSettings?: (detector: UnifiedRuleSummary) => void;
+  /** Open the edit form for a CloudWatch alarm (only offered when CloudWatch writes are on). */
+  onEditCloudWatchAlarm?: (input: CloudWatchMetricAlarmInput) => void;
+  /** After a CloudWatch alarm was deleted or its notifications changed. */
+  onCloudWatchAlarmChanged?: () => void;
   onEditDetectorFeatures?: (detector: UnifiedRuleSummary) => void;
   onEditForecaster?: (forecaster: UnifiedRuleSummary) => void;
   onStartResources?: (resources: UnifiedRuleSummary[]) => Promise<void> | void;
@@ -60,7 +65,7 @@ interface MonitorsTableProps {
    */
   onToggleEnabled?: (monitor: UnifiedRuleSummary) => Promise<void> | void;
   onCreateMonitor?: (
-    type: 'logs' | 'prometheus' | 'metrics' | 'slo' | 'detector' | 'forecaster'
+    type: 'logs' | 'prometheus' | 'metrics' | 'cloudwatch' | 'slo' | 'detector' | 'forecaster'
   ) => void;
   /** Manually refetch the rules list (e.g. to pick up a just-created rule). */
   onRefresh?: () => void;
@@ -100,6 +105,8 @@ export const MonitorsTable: React.FC<MonitorsTableProps> = ({
   onClone,
   onEdit,
   onEditDetectorSettings,
+  onEditCloudWatchAlarm,
+  onCloudWatchAlarmChanged,
   onEditDetectorFeatures,
   onEditForecaster,
   onStartResources,
@@ -530,6 +537,8 @@ export const MonitorsTable: React.FC<MonitorsTableProps> = ({
                 onClone={onClone}
                 onEdit={onEdit}
                 onEditDetectorSettings={onEditDetectorSettings}
+                onEditCloudWatchAlarm={onEditCloudWatchAlarm}
+                onCloudWatchAlarmChanged={onCloudWatchAlarmChanged}
                 onEditDetectorFeatures={onEditDetectorFeatures}
                 onEditForecaster={onEditForecaster}
                 onStartResources={(resources) => handleLifecycleAction(resources, onStartResources)}
