@@ -41,7 +41,16 @@ export const CloudWatchErrorCode = {
   ACCESS_DENIED: 'CLOUDWATCH_ACCESS_DENIED',
   THROTTLED: 'CLOUDWATCH_THROTTLED',
   ENDPOINT_UNREACHABLE: 'CLOUDWATCH_ENDPOINT_UNREACHABLE',
+  INVALID_REQUEST: 'CLOUDWATCH_INVALID_REQUEST',
+  QUOTA_EXCEEDED: 'CLOUDWATCH_QUOTA_EXCEEDED',
+  ALARM_NOT_FOUND: 'CLOUDWATCH_ALARM_NOT_FOUND',
 } as const;
+
+/**
+ * Operation-id prefix of the routes that change alarms (`cloudwatch.alarm.write.create`, …).
+ * Their access-denied remediation names the write permissions.
+ */
+export const CLOUDWATCH_WRITE_OPERATION_PREFIX = 'cloudwatch.alarm.write.';
 
 function msg(code: string, key: string, defaultMessage: string): MessageDescriptor {
   return { id: `${ID_PREFIX}.${code}.${key}`, defaultMessage };
@@ -111,6 +120,32 @@ const THROTTLED_NAMES = new Set([
 ]);
 
 /**
+ * The account's alarm quota is used up (`PutMetricAlarm`'s `LimitExceeded` fault). Not a
+ * throttle: retrying won't help until alarms are deleted or the quota is raised.
+ */
+const QUOTA_EXCEEDED_NAMES = new Set(['LimitExceededFault', 'LimitExceeded']);
+
+/** CloudWatch rejected the request's parameters (as opposed to our own validation). */
+const INVALID_REQUEST_NAMES = new Set([
+  'InvalidParameterValue',
+  'InvalidParameterValueException',
+  'InvalidParameterCombination',
+  'InvalidParameterCombinationException',
+  'MissingParameter',
+  'MissingRequiredParameterException',
+  'InvalidFormatFault',
+]);
+
+/** The named alarm doesn't exist (e.g. deleted elsewhere since the list was read). */
+const ALARM_NOT_FOUND_NAMES = new Set(['ResourceNotFound', 'ResourceNotFoundException']);
+
+function isWriteOperation(ctx: RawErrorContext): boolean {
+  return (
+    typeof ctx.operation === 'string' && ctx.operation.startsWith(CLOUDWATCH_WRITE_OPERATION_PREFIX)
+  );
+}
+
+/**
  * Transport failures. A mistyped/nonexistent region manifests as a DNS
  * failure on `monitoring.<region>.amazonaws.com`, so ENOTFOUND is the
  * canonical "bad region" signal. Claimed only for `sourceType: 'cloudwatch'`.
@@ -148,6 +183,16 @@ export const cloudWatchClassifier: ErrorClassifier = {
         AUTH_EXPIRED_NAMES.has(ctx.errorName) ||
         CLOUDWATCH_ACCESS_DENIED_ERROR_NAMES.has(ctx.errorName) ||
         THROTTLED_NAMES.has(ctx.errorName)
+      ) {
+        return true;
+      }
+      // Generic-sounding AWS names (parameter, quota and not-found faults) are only claimed for
+      // CloudWatch, so another provider's error of the same name isn't relabeled.
+      if (
+        isCloudWatchSource(ctx) &&
+        (QUOTA_EXCEEDED_NAMES.has(ctx.errorName) ||
+          INVALID_REQUEST_NAMES.has(ctx.errorName) ||
+          ALARM_NOT_FOUND_NAMES.has(ctx.errorName))
       ) {
         return true;
       }
@@ -228,11 +273,74 @@ export const cloudWatchClassifier: ErrorClassifier = {
         retryable: false,
         httpStatus: 403,
         details,
+        messages: isWriteOperation(ctx)
+          ? {
+              title: msg(
+                CloudWatchErrorCode.ACCESS_DENIED,
+                'writeTitle',
+                'CloudWatch change denied'
+              ),
+              message: msg(
+                CloudWatchErrorCode.ACCESS_DENIED,
+                'writeMessage',
+                "Your AWS identity isn't allowed to make this change to CloudWatch alarms."
+              ),
+              remediation: msg(
+                CloudWatchErrorCode.ACCESS_DENIED,
+                'writeRemediation',
+                'Ask an administrator to grant your identity cloudwatch:PutMetricAlarm, cloudwatch:DeleteAlarms, cloudwatch:EnableAlarmActions and cloudwatch:DisableAlarmActions (and cloudwatch:TagResource to tag new alarms), then retry.'
+              ),
+            }
+          : messages(
+              CloudWatchErrorCode.ACCESS_DENIED,
+              'CloudWatch access denied',
+              'The AWS credentials are valid but not authorized for the CloudWatch API that was called.',
+              'Ask an administrator to grant your identity cloudwatch:DescribeAlarms, cloudwatch:DescribeAlarmHistory and cloudwatch:GetMetricData, then retry.'
+            ),
+      };
+    }
+    if (QUOTA_EXCEEDED_NAMES.has(name)) {
+      return {
+        category: 'PRECONDITION_FAILED',
+        code: CloudWatchErrorCode.QUOTA_EXCEEDED,
+        retryable: false,
+        httpStatus: 400,
+        details,
         messages: messages(
-          CloudWatchErrorCode.ACCESS_DENIED,
-          'CloudWatch access denied',
-          'The AWS credentials are valid but not authorized for the CloudWatch API that was called.',
-          'Ask an administrator to grant your identity cloudwatch:DescribeAlarms, cloudwatch:DescribeAlarmHistory and cloudwatch:GetMetricData, then retry.'
+          CloudWatchErrorCode.QUOTA_EXCEEDED,
+          'CloudWatch alarm quota reached',
+          'This account has reached its CloudWatch alarm quota in this Region, so the alarm was not created.',
+          'Delete alarms you no longer need, or ask an administrator to request a higher CloudWatch alarm quota, then retry.'
+        ),
+      };
+    }
+    if (INVALID_REQUEST_NAMES.has(name)) {
+      return {
+        category: 'VALIDATION',
+        code: CloudWatchErrorCode.INVALID_REQUEST,
+        retryable: false,
+        httpStatus: 400,
+        details,
+        messages: messages(
+          CloudWatchErrorCode.INVALID_REQUEST,
+          'CloudWatch rejected the alarm settings',
+          "CloudWatch didn't accept one of the alarm's settings, for example a metric, statistic, unit or period combination it doesn't support.",
+          'Check the metric, statistic, unit and period, then try again.'
+        ),
+      };
+    }
+    if (ALARM_NOT_FOUND_NAMES.has(name)) {
+      return {
+        category: 'NOT_FOUND',
+        code: CloudWatchErrorCode.ALARM_NOT_FOUND,
+        retryable: false,
+        httpStatus: 404,
+        details,
+        messages: messages(
+          CloudWatchErrorCode.ALARM_NOT_FOUND,
+          'CloudWatch alarm not found',
+          'The alarm no longer exists. It may have been deleted or renamed outside this view.',
+          'Refresh the list and try again.'
         ),
       };
     }

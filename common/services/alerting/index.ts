@@ -5,5 +5,6 @@
 
 export * from './filter';
 export * from './validators';
+export * from './cloudwatch_alarm_validator';
 export * from './promql_validator';
 export * from './time_range';

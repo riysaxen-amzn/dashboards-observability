@@ -246,6 +246,83 @@ export interface CloudWatchCallOptions {
   signal?: AbortSignal;
 }
 
+// ============================================================================
+// Writes (optional on the source)
+// ============================================================================
+// A source may also create, update and delete metric alarms and turn their actions on and off.
+// The methods are optional: a read-only source leaves them out, and the plugin then never offers
+// writes. The alerting plugin validates every input (`validateCloudWatchMetricAlarm`) before it
+// reaches the source, and only ever writes single-metric, static-threshold alarms whose actions
+// are SNS topics; a source should still validate on its own side.
+
+/** The four static-threshold comparison operators (anomaly-detection bands are not written). */
+export type CloudWatchComparisonOperator =
+  | 'GreaterThanThreshold'
+  | 'GreaterThanOrEqualToThreshold'
+  | 'LessThanThreshold'
+  | 'LessThanOrEqualToThreshold';
+
+export type CloudWatchStatistic = 'Average' | 'Sum' | 'Minimum' | 'Maximum' | 'SampleCount';
+
+export type CloudWatchTreatMissingData = 'missing' | 'notBreaching' | 'breaching' | 'ignore';
+
+export interface CloudWatchTag {
+  key: string;
+  value: string;
+}
+
+/**
+ * A single-metric, static-threshold alarm, as `PutMetricAlarm` takes it. Exactly one of
+ * `statistic` and `extendedStatistic` (a percentile such as `p99`) is set. `PutMetricAlarm`
+ * replaces the whole alarm, so an update passes every field it keeps.
+ */
+export interface CloudWatchMetricAlarmInput {
+  alarmName: string;
+  description?: string;
+  namespace: string;
+  metricName: string;
+  dimensions?: CloudWatchDimension[];
+  statistic?: CloudWatchStatistic;
+  extendedStatistic?: string;
+  /** Seconds: 10, 20 or 30 (high resolution), or a multiple of 60. */
+  period: number;
+  unit?: string;
+  evaluationPeriods: number;
+  /** M of "M out of N" (N is `evaluationPeriods`); defaults to N. */
+  datapointsToAlarm?: number;
+  comparisonOperator: CloudWatchComparisonOperator;
+  threshold: number;
+  treatMissingData?: CloudWatchTreatMissingData;
+  actionsEnabled?: boolean;
+  /** SNS topic ARNs only. */
+  alarmActions?: string[];
+  okActions?: string[];
+  insufficientDataActions?: string[];
+  /** Applied when the alarm is created; CloudWatch ignores tags on an update. */
+  tags?: CloudWatchTag[];
+}
+
+/** One metric `ListMetrics` returned. */
+export interface CloudWatchMetricRef {
+  namespace: string;
+  metricName: string;
+  dimensions: CloudWatchDimension[];
+}
+
+export interface CloudWatchListMetricsQuery {
+  region?: string;
+  namespace?: string;
+  metricName?: string;
+  /** Only metrics with these dimensions (a missing `value` matches any value). */
+  dimensions?: Array<{ name: string; value?: string }>;
+  nextToken?: string;
+}
+
+export interface CloudWatchMetricList {
+  metrics: CloudWatchMetricRef[];
+  nextToken?: string;
+}
+
 export interface CloudWatchAlarmSource {
   /**
    * The account + region the request's credentials reach. Every `region` parameter below is
@@ -311,4 +388,52 @@ export interface CloudWatchAlarmSource {
     query: CloudWatchMetricDataQuery,
     options?: CloudWatchCallOptions
   ): Promise<CloudWatchMetricDataPoint[]>;
+
+  // ---- Optional: metric discovery for the alarm form ----
+
+  /** One page of `ListMetrics`, for the create form's metric picker. */
+  listMetrics?(
+    query: CloudWatchListMetricsQuery,
+    options?: CloudWatchCallOptions
+  ): Promise<CloudWatchMetricList>;
+
+  // ---- Optional: writes (see "Writes" above) ----
+
+  /** Create or replace a metric alarm (`PutMetricAlarm` is an upsert). */
+  putMetricAlarm?(
+    input: CloudWatchMetricAlarmInput,
+    region?: string,
+    options?: CloudWatchCallOptions
+  ): Promise<void>;
+
+  /** Delete alarms by name (`DeleteAlarms`). */
+  deleteAlarms?(
+    alarmNames: string[],
+    region?: string,
+    options?: CloudWatchCallOptions
+  ): Promise<void>;
+
+  /** Turn alarm actions on or off (`EnableAlarmActions` / `DisableAlarmActions`). */
+  setAlarmActionsEnabled?(
+    alarmNames: string[],
+    enabled: boolean,
+    region?: string,
+    options?: CloudWatchCallOptions
+  ): Promise<void>;
+}
+
+/** The write methods, all present: a source that has them can create and edit alarms. */
+export type CloudWatchAlarmWriter = Required<
+  Pick<CloudWatchAlarmSource, 'putMetricAlarm' | 'deleteAlarms' | 'setAlarmActionsEnabled'>
+>;
+
+/** Whether a source implements every write method. */
+export function hasCloudWatchWrites(
+  source: CloudWatchAlarmSource
+): source is CloudWatchAlarmSource & CloudWatchAlarmWriter {
+  return (
+    typeof source.putMetricAlarm === 'function' &&
+    typeof source.deleteAlarms === 'function' &&
+    typeof source.setAlarmActionsEnabled === 'function'
+  );
 }

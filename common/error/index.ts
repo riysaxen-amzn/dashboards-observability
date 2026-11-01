@@ -37,6 +37,7 @@ export { httpStatusClassifier } from './classifiers/http_status';
 export { timeoutClassifier } from './classifiers/timeout';
 export {
   CLOUDWATCH_ACCESS_DENIED_ERROR_NAMES,
+  CLOUDWATCH_WRITE_OPERATION_PREFIX,
   cloudWatchClassifier,
   CloudWatchErrorCode,
 } from './classifiers/cloudwatch';

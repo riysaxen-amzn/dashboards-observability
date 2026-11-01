@@ -89,4 +89,33 @@ describe('setupRoutes CloudWatch alarms', () => {
     });
     expect(alertingDeps().cloudWatchRegion).toBeUndefined();
   });
+  it('passes the writes flag per request, off when it is absent or fails', async () => {
+    const writable = {
+      putMetricAlarm: jest.fn(),
+      deleteAlarms: jest.fn(),
+      setAlarmActionsEnabled: jest.fn(),
+    } as unknown as CloudWatchAlarmSource;
+    const factory = jest.fn().mockReturnValue(writable);
+    const isWritesEnabled = jest.fn(async () => true);
+    setup({
+      cloudWatch: { isEnabled: async () => true, isWritesEnabled },
+      cloudWatchAlarmSourceFactory: factory,
+    });
+    expect((await alertingDeps().cwBackend(request)).canWrite).toBe(true);
+    expect(isWritesEnabled).toHaveBeenCalledWith(request);
+
+    jest.clearAllMocks();
+    setup({ cloudWatch: { isEnabled: async () => true }, cloudWatchAlarmSourceFactory: factory });
+    expect((await alertingDeps().cwBackend(request)).canWrite).toBe(false);
+
+    jest.clearAllMocks();
+    setup({
+      cloudWatch: {
+        isEnabled: async () => true,
+        isWritesEnabled: async () => Promise.reject(new Error('x')),
+      },
+      cloudWatchAlarmSourceFactory: factory,
+    });
+    expect((await alertingDeps().cwBackend(request)).canWrite).toBe(false);
+  });
 });

@@ -35,6 +35,9 @@ const observabilityConfig = {
       // no effect. `defaultRegion` is the region the virtual datasource queries; unset, the
       // source uses its own default region.
       enabled: schema.boolean({ defaultValue: false }),
+      // Lets users create, edit and delete CloudWatch metric alarms, and turn their actions on
+      // and off. Off by default; it needs `enabled` too, and a source that can write.
+      writesEnabled: schema.boolean({ defaultValue: false }),
       defaultRegion: schema.maybe(schema.string()),
     }),
     errors: schema.object({

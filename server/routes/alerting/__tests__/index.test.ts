@@ -56,7 +56,7 @@ describe('registerAlertingRoutes', () => {
     mockRouter.delete.mockClear();
   });
 
-  it('registers all runtime routes when metadata routes are enabled (22 GET + 4 POST + 1 PUT + 1 DELETE = 28)', () => {
+  it('registers all runtime routes when metadata routes are enabled (23 GET + 6 POST + 2 PUT + 2 DELETE = 33)', () => {
     registerAlertingRoutes(mockRouter as never, {
       osBackend: mockOsBackend,
       promBackend: mockPromBackend,
@@ -70,14 +70,15 @@ describe('registerAlertingRoutes', () => {
       mockRouter.put.mock.calls.length +
       mockRouter.delete.mock.calls.length;
     // 14 inline GETs (incl. probe + destinations + indices + aliases)
-    // + 4 CloudWatch alarm GETs (states-at/detail/history/relationships)
-    // + 4 metadata GETs = 22 GETs
+    // + 5 CloudWatch GETs (states-at/detail/history/relationships/metrics)
+    // + 4 metadata GETs = 23 GETs
     // 2 monitor POSTs + 1 PUT + 1 DELETE + 1 mappings POST + 1 prometheus preview POST = 6 non-GET routes
-    expect(total).toBe(28);
-    expect(mockRouter.get.mock.calls.length).toBe(22);
+    // + CloudWatch writes: 2 POSTs (create, actions) + 1 PUT + 1 DELETE = 10 non-GET routes
+    expect(total).toBe(33);
+    expect(mockRouter.get.mock.calls.length).toBe(23);
   });
 
-  it('skips the 4 metadata GET routes when enableMetadataRoutes is false (18 GET + 3 POST + 1 PUT + 1 DELETE = 23)', () => {
+  it('skips the 4 metadata GET routes when enableMetadataRoutes is false (19 GET + 5 POST + 2 PUT + 2 DELETE = 28)', () => {
     registerAlertingRoutes(mockRouter as never, {
       osBackend: mockOsBackend,
       promBackend: mockPromBackend,
@@ -90,8 +91,8 @@ describe('registerAlertingRoutes', () => {
       mockRouter.post.mock.calls.length +
       mockRouter.put.mock.calls.length +
       mockRouter.delete.mock.calls.length;
-    expect(total).toBe(23);
-    expect(mockRouter.get.mock.calls.length).toBe(18);
+    expect(total).toBe(28);
+    expect(mockRouter.get.mock.calls.length).toBe(19);
   });
 
   it('registers the destinations read route', () => {

@@ -56,6 +56,7 @@ import type {
   CloudWatchAlarmSourceFactory,
   CloudWatchFlagResolver,
 } from './services/alerting/cloudwatch/types';
+import { hasCloudWatchWrites } from '../common/types/alerting';
 
 export interface ObservabilityPluginSetupDependencies {
   dataSourceManagement: ReturnType<DataSourceManagementPlugin['setup']>;
@@ -353,7 +354,7 @@ export class ObservabilityPlugin implements Plugin<
     const observabilityConfig = await this.initializerContext.config
       .create<{
         alertManager?: { enabled?: boolean };
-        cloudwatch?: { enabled?: boolean; defaultRegion?: string };
+        cloudwatch?: { enabled?: boolean; writesEnabled?: boolean; defaultRegion?: string };
         errors?: { exposeSensitiveErrorDetail?: boolean };
         slo?: {
           enabled?: boolean;
@@ -387,28 +388,47 @@ export class ObservabilityPlugin implements Plugin<
     // point, the way it can provide a Prometheus backend.
     // (Asserted, not annotated: an annotated `undefined` would narrow to `never` below.)
     const cloudWatchAlarmSourceFactory = undefined as CloudWatchAlarmSourceFactory | undefined;
-    const ymlCloudWatchEnabled = observabilityConfig.cloudwatch?.enabled ?? false;
-    // The flag for one request: the dynamic-config value for its tenant/application when there
-    // is one (like `alertManager` and `slo` below), else the yml value. Fails closed to yml.
-    const isCloudWatchFlagOn: CloudWatchFlagResolver = async (request) => {
+    const ymlCloudWatch = {
+      enabled: observabilityConfig.cloudwatch?.enabled ?? false,
+      writesEnabled: observabilityConfig.cloudwatch?.writesEnabled ?? false,
+    };
+    // The CloudWatch flags for one request: the dynamic-config values for its tenant/application
+    // when there are some (like `alertManager` and `slo` below), else the yml values. Fails
+    // closed to yml.
+    const cloudWatchFlags = async (request: OpenSearchDashboardsRequest) => {
       try {
         const dynamicConfig = await core.dynamicConfigService.getStartService();
         const store = dynamicConfig.createStoreFromRequest(request);
-        // No per-request store (e.g. no dynamic config for this request): use the yml value.
-        if (!store) return ymlCloudWatchEnabled;
+        // No per-request store (e.g. no dynamic config for this request): use the yml values.
+        if (!store) return ymlCloudWatch;
         const config = await dynamicConfig
           .getClient()
-          .getConfig({ name: 'observability' }, { asyncLocalStorageContext: store });
-        return config.cloudwatch?.enabled ?? ymlCloudWatchEnabled;
+          .getConfig({ pluginConfigPath: 'observability' }, { asyncLocalStorageContext: store });
+        return {
+          enabled: config.cloudwatch?.enabled ?? ymlCloudWatch.enabled,
+          writesEnabled: config.cloudwatch?.writesEnabled ?? ymlCloudWatch.writesEnabled,
+        };
       } catch {
-        return ymlCloudWatchEnabled;
+        return ymlCloudWatch;
       }
     };
-    // Whether CloudWatch is on for this request: the flag, and the deployment's source agreeing.
-    const isCloudWatchAvailable = async (request: OpenSearchDashboardsRequest) =>
-      !!cloudWatchAlarmSourceFactory &&
-      (await isCloudWatchFlagOn(request)) &&
-      !!(await cloudWatchAlarmSourceFactory(request));
+    const isCloudWatchFlagOn: CloudWatchFlagResolver = async (request) =>
+      (await cloudWatchFlags(request)).enabled === true;
+    // Writes need both flags: never on while CloudWatch itself is off.
+    const isCloudWatchWritesFlagOn: CloudWatchFlagResolver = async (request) => {
+      const flags = await cloudWatchFlags(request);
+      return flags.enabled === true && flags.writesEnabled === true;
+    };
+    // What CloudWatch offers this request: reads need the flag and the deployment's source;
+    // writes also need the writes flag and a source that implements them.
+    const cloudWatchAccess = async (request: OpenSearchDashboardsRequest) => {
+      if (!cloudWatchAlarmSourceFactory) return { read: false, write: false };
+      const flags = await cloudWatchFlags(request);
+      if (!flags.enabled) return { read: false, write: false };
+      const source = await cloudWatchAlarmSourceFactory(request);
+      if (!source) return { read: false, write: false };
+      return { read: true, write: flags.writesEnabled === true && hasCloudWatchWrites(source) };
+    };
     const ruleDedupEnabled = observabilityConfig.slo?.ruleDedup?.enabled ?? true;
     this.sloReconcilerOpts = {
       enabled: observabilityConfig.slo?.reconciler?.enabled ?? true,
@@ -446,6 +466,7 @@ export class ObservabilityPlugin implements Plugin<
         // Experimental — fail dark: absent config reads as disabled, matching
         // the schema default.
         isEnabled: isCloudWatchFlagOn,
+        isWritesEnabled: isCloudWatchWritesFlagOn,
         // Unset: the source uses its own default region.
         region: observabilityConfig.cloudwatch?.defaultRegion,
       },
@@ -548,9 +569,11 @@ export class ObservabilityPlugin implements Plugin<
         show: true,
         alertManagerEnabled: ymlAlertManagerEnabled,
         sloEnabled: ymlSloEnabled,
-        // Whether the browser shows the virtual CloudWatch datasource; resolved per request by
-        // the switcher below (flag and source), off until then.
+        // Whether the browser shows the virtual CloudWatch datasource, and whether it offers
+        // create/edit/delete for it; resolved per request by the switcher below (flags and
+        // source), off until then. The server enforces both on its own.
         cloudWatchAlarmsEnabled: false,
+        cloudWatchAlarmWritesEnabled: false,
       },
     }));
 
@@ -572,13 +595,18 @@ export class ObservabilityPlugin implements Plugin<
           { name: 'observability' },
           { asyncLocalStorageContext: store! }
         );
+        const cloudWatch = await cloudWatchAccess(request).catch(() => ({
+          read: false,
+          write: false,
+        }));
         return {
           ...capabilities,
           observability: {
             ...(capabilities.observability || {}),
             alertManagerEnabled: config.alertManager?.enabled ?? ymlAlertManagerEnabled,
             sloEnabled: config.slo?.enabled ?? ymlSloEnabled,
-            cloudWatchAlarmsEnabled: await isCloudWatchAvailable(request).catch(() => false),
+            cloudWatchAlarmsEnabled: cloudWatch.read,
+            cloudWatchAlarmWritesEnabled: cloudWatch.write,
           },
         };
       } catch (error) {

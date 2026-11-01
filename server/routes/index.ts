@@ -60,7 +60,12 @@ export function setupRoutes({
    * `isEnabled` is the per-request flag (`observability.cloudwatch.enabled`, dynamic config
    * aware); `region` is the region the source queries (undefined: the source's default).
    */
-  cloudWatch?: { isEnabled: CloudWatchFlagResolver; region?: string };
+  cloudWatch?: {
+    isEnabled: CloudWatchFlagResolver;
+    /** `observability.cloudwatch.writesEnabled` for the request (off when absent). */
+    isWritesEnabled?: CloudWatchFlagResolver;
+    region?: string;
+  };
   /**
    * Reaches CloudWatch for one request. This plugin ships none: a deployment that can call
    * CloudWatch with the caller's credentials passes one (as it can pass a Prometheus backend).
@@ -125,7 +130,11 @@ export function setupRoutes({
       ? async (request: OpenSearchDashboardsRequest) => {
           if (!(await cloudWatch.isEnabled(request))) return undefined;
           const source = await cloudWatchAlarmSourceFactory(request);
-          return source ? new CloudWatchBackend(logger, source) : undefined;
+          if (!source) return undefined;
+          const writesEnabled = cloudWatch.isWritesEnabled
+            ? await cloudWatch.isWritesEnabled(request).catch(() => false)
+            : false;
+          return new CloudWatchBackend(logger, source, { writesEnabled });
         }
       : undefined;
 

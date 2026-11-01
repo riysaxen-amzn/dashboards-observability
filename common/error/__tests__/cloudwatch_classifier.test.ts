@@ -153,3 +153,49 @@ describe('cloudWatchClassifier — sign-in without AWS credentials', () => {
     expect(out.remediation).not.toContain('Sign in again');
   });
 });
+
+describe('cloudWatchClassifier — alarm writes', () => {
+  const cw = (errorName: string, operation = 'cloudwatch.alarm.write.create') =>
+    classifyError({ operation, errorName, sourceType: 'cloudwatch', message: 'x' });
+
+  it('names the write permissions when a write is denied, and the read ones otherwise', () => {
+    const write = cw('AccessDeniedException');
+    expect(write.code).toBe(CloudWatchErrorCode.ACCESS_DENIED);
+    expect(write.remediation).toContain('cloudwatch:PutMetricAlarm');
+    const read = cw('AccessDeniedException', 'cloudwatch.alarm.detail');
+    expect(read.remediation).toContain('cloudwatch:DescribeAlarms');
+    expect(read.remediation).not.toContain('PutMetricAlarm');
+  });
+
+  it('reports the alarm quota as a non-retryable precondition, not a throttle', () => {
+    const out = cw('LimitExceededFault');
+    expect(out).toMatchObject({
+      category: 'PRECONDITION_FAILED',
+      code: CloudWatchErrorCode.QUOTA_EXCEEDED,
+      retryable: false,
+    });
+  });
+
+  it('reports CloudWatch parameter faults as validation, and a missing alarm as not found', () => {
+    expect(cw('InvalidParameterValue')).toMatchObject({
+      category: 'VALIDATION',
+      code: CloudWatchErrorCode.INVALID_REQUEST,
+      httpStatus: 400,
+    });
+    expect(cw('InvalidParameterCombination').code).toBe(CloudWatchErrorCode.INVALID_REQUEST);
+    expect(cw('ResourceNotFound')).toMatchObject({
+      category: 'NOT_FOUND',
+      code: CloudWatchErrorCode.ALARM_NOT_FOUND,
+    });
+  });
+
+  it('leaves the same generic names from other sources to other classifiers', () => {
+    const out = classifyError({
+      operation: 'rule.create.metric',
+      errorName: 'InvalidParameterValue',
+      sourceType: 'prometheus',
+      message: 'x',
+    });
+    expect(out.code).not.toBe(CloudWatchErrorCode.INVALID_REQUEST);
+  });
+});

@@ -20,6 +20,9 @@ import type {
   CloudWatchAlarmList,
   CloudWatchAlarmState,
   CloudWatchCallOptions,
+  CloudWatchListMetricsQuery,
+  CloudWatchMetricAlarmInput,
+  CloudWatchMetricList,
   CloudWatchMetricPreview,
   CloudWatchRelationshipGraph,
   CloudWatchRelationshipNode,
@@ -27,7 +30,15 @@ import type {
   Datasource,
   Logger,
 } from '../../../../common/types/alerting';
-import { CLOUDWATCH_HISTORY_RETENTION_MS } from '../../../../common/types/alerting';
+import {
+  CLOUDWATCH_HISTORY_RETENTION_MS,
+  hasCloudWatchWrites,
+} from '../../../../common/types/alerting';
+import {
+  cloudWatchAlarmEditBlocker,
+  validateCloudWatchMetricAlarm,
+} from '../../../../common/services/alerting/cloudwatch_alarm_validator';
+import { createConflictError, createNotFoundError, createValidationError } from '../errors';
 import { CLOUDWATCH_ACCESS_DENIED_ERROR_NAMES } from '../../../../common/error';
 import { CloudWatchAlarmSource, CloudWatchCredentialsError } from './types';
 
@@ -123,8 +134,123 @@ export class CloudWatchBackend {
 
   constructor(
     private readonly logger: Logger,
-    private readonly source: CloudWatchAlarmSource
+    private readonly source: CloudWatchAlarmSource,
+    private readonly options: {
+      /** `observability.cloudwatch.writesEnabled` for this request. */
+      writesEnabled?: boolean;
+    } = {}
   ) {}
+
+  /** Whether this request may change alarms: the writes flag on and a source that can write. */
+  public get canWrite(): boolean {
+    return this.options.writesEnabled === true && hasCloudWatchWrites(this.source);
+  }
+
+  /** Whether the source can list metrics (the create form's metric picker). */
+  public get canListMetrics(): boolean {
+    return typeof this.source.listMetrics === 'function';
+  }
+
+  private writer() {
+    if (!this.canWrite || !hasCloudWatchWrites(this.source)) {
+      throw createNotFoundError('CloudWatch alarm changes are not enabled for this request');
+    }
+    return this.source;
+  }
+
+  private assertValid(input: CloudWatchMetricAlarmInput): void {
+    const { valid, errors } = validateCloudWatchMetricAlarm(input);
+    if (!valid) {
+      const [field, message] = Object.entries(errors)[0];
+      throw createValidationError(message, field);
+    }
+  }
+
+  /**
+   * Create a metric alarm. `PutMetricAlarm` replaces an alarm of the same name, so this first
+   * checks the name is free and refuses with a conflict otherwise. (Two creates of one name at the
+   * same moment can still race; CloudWatch has no create-only write.)
+   */
+  async createMetricAlarm(
+    ds: Datasource,
+    input: CloudWatchMetricAlarmInput,
+    call?: CloudWatchCallOptions
+  ): Promise<void> {
+    const writer = this.writer();
+    this.assertValid(input);
+    const existing = await this.guarded(() =>
+      this.source.describeAlarm(input.alarmName, ds.region, call)
+    );
+    if (existing) {
+      throw createConflictError(
+        `An alarm named "${input.alarmName}" already exists`,
+        input.alarmName
+      );
+    }
+    await this.guarded(() => writer.putMetricAlarm(input, ds.region, call));
+    this.logger.info(`CloudWatch alarm created in ${ds.region ?? 'default region'}`);
+  }
+
+  /**
+   * Replace an existing metric alarm. Only alarms the form can reproduce exactly are editable
+   * (`cloudWatchAlarmEditBlocker`); tags are dropped because CloudWatch ignores them on an update.
+   */
+  async updateMetricAlarm(
+    ds: Datasource,
+    input: CloudWatchMetricAlarmInput,
+    call?: CloudWatchCallOptions
+  ): Promise<void> {
+    const writer = this.writer();
+    this.assertValid(input);
+    const existing = await this.guarded(() =>
+      this.source.describeAlarm(input.alarmName, ds.region, call)
+    );
+    if (!existing) throw createNotFoundError('CloudWatch alarm not found', input.alarmName);
+    const blocker = cloudWatchAlarmEditBlocker(existing);
+    if (blocker) throw createValidationError(blocker, 'alarmName');
+    const { tags: _ignored, ...withoutTags } = input;
+    await this.guarded(() => writer.putMetricAlarm(withoutTags, ds.region, call));
+    this.logger.info(`CloudWatch alarm updated in ${ds.region ?? 'default region'}`);
+  }
+
+  /** Delete one alarm (any type). Not found is a 404, so a stale row says so. */
+  async deleteAlarm(ds: Datasource, alarmName: string, call?: CloudWatchCallOptions) {
+    const writer = this.writer();
+    const existing = await this.guarded(() =>
+      this.source.describeAlarm(alarmName, ds.region, call)
+    );
+    if (!existing) throw createNotFoundError('CloudWatch alarm not found', alarmName);
+    await this.guarded(() => writer.deleteAlarms([alarmName], ds.region, call));
+    this.logger.info(`CloudWatch alarm deleted in ${ds.region ?? 'default region'}`);
+  }
+
+  /** Turn an alarm's actions on or off (any type); the alarm keeps evaluating either way. */
+  async setAlarmActionsEnabled(
+    ds: Datasource,
+    alarmName: string,
+    enabled: boolean,
+    call?: CloudWatchCallOptions
+  ): Promise<void> {
+    const writer = this.writer();
+    const existing = await this.guarded(() =>
+      this.source.describeAlarm(alarmName, ds.region, call)
+    );
+    if (!existing) throw createNotFoundError('CloudWatch alarm not found', alarmName);
+    await this.guarded(() => writer.setAlarmActionsEnabled([alarmName], enabled, ds.region, call));
+  }
+
+  /** One page of metrics for the form's picker. */
+  async listMetrics(
+    ds: Datasource,
+    query: Omit<CloudWatchListMetricsQuery, 'region'>,
+    call?: CloudWatchCallOptions
+  ): Promise<CloudWatchMetricList> {
+    const list = this.source.listMetrics;
+    if (typeof list !== 'function') {
+      throw createNotFoundError('Listing CloudWatch metrics is not supported here');
+    }
+    return this.guarded(() => list.call(this.source, { ...query, region: ds.region }, call));
+  }
 
   /** Wrap a source call, mapping credential/other failures to typed errors. */
   private async guarded<T>(op: () => Promise<T>): Promise<T> {

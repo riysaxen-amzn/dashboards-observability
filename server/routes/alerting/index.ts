@@ -22,7 +22,13 @@ import {
   RequestHandlerContext,
   SavedObject,
 } from '../../../../../src/core/server';
-import type { AlertingOSClient, Datasource, Logger } from '../../../common/types/alerting';
+import type {
+  AlertingOSClient,
+  CloudWatchMetricAlarmInput,
+  Datasource,
+  Logger,
+} from '../../../common/types/alerting';
+import { CLOUDWATCH_WRITE_OPERATION_PREFIX } from '../../../common/error';
 import {
   parseDateMathMs,
   validateDateMath,
@@ -34,7 +40,9 @@ import {
   PrometheusMetadataService,
   SavedObjectDatasourceService,
   createNotFoundError,
+  createValidationError,
 } from '../../services/alerting';
+import { errorToStatus } from '../../services/alerting/errors';
 import { DirectQueryPrometheusBackend } from '../../services/alerting/directquery_prometheus_backend';
 import { MonitorMutationService } from '../../services/alerting/monitor_mutation_service';
 import { stripTrailingComparison } from '../../services/alerting/alert_utils';
@@ -1066,6 +1074,225 @@ export function registerAlertingRoutes(router: IRouter, deps: AlertingRoutesDeps
         );
         if (!graph) return { status: 404, body: { error: 'Alarm not found' } };
         return { status: 200, body: graph };
+      })
+  );
+
+  // ===========================================================================
+  // CloudWatch alarm writes (create / update / delete / actions) and metric listing
+  // ===========================================================================
+  // Each needs, for this request, CloudWatch on, the writes flag on and a source that can write
+  // (`CloudWatchBackend.canWrite`); otherwise 404, like the read routes when CloudWatch is off.
+  // Bodies are validated twice: shape here, then `validateCloudWatchMetricAlarm` in the backend
+  // (SNS-only actions, periods, M of N, …). Our own refusals (validation, name taken, not found)
+  // return their fixed message; CloudWatch's failures go through the classifier, which keeps
+  // CloudWatch's text out of logs and responses.
+
+  const cwText = (max: number) => schema.string({ maxLength: max });
+  const cwAlarmBodySchema = schema.object({
+    alarmName: cloudWatchAlarmNameSchema,
+    description: schema.maybe(cwText(1024)),
+    namespace: cwText(255),
+    metricName: cwText(255),
+    dimensions: schema.maybe(
+      schema.arrayOf(schema.object({ name: cwText(255), value: cwText(1024) }), { maxSize: 30 })
+    ),
+    statistic: schema.maybe(cwText(32)),
+    extendedStatistic: schema.maybe(cwText(32)),
+    period: schema.number({ min: 1, max: 86400 }),
+    unit: schema.maybe(cwText(32)),
+    evaluationPeriods: schema.number({ min: 1, max: 100000 }),
+    datapointsToAlarm: schema.maybe(schema.number({ min: 1, max: 100000 })),
+    comparisonOperator: cwText(64),
+    threshold: schema.number(),
+    treatMissingData: schema.maybe(cwText(32)),
+    actionsEnabled: schema.maybe(schema.boolean()),
+    alarmActions: schema.maybe(schema.arrayOf(cwText(1024), { maxSize: 5 })),
+    okActions: schema.maybe(schema.arrayOf(cwText(1024), { maxSize: 5 })),
+    insufficientDataActions: schema.maybe(schema.arrayOf(cwText(1024), { maxSize: 5 })),
+    tags: schema.maybe(
+      schema.arrayOf(
+        schema.object({ key: cwText(128), value: schema.string({ maxLength: 256 }) }),
+        {
+          maxSize: 50,
+        }
+      )
+    ),
+  });
+
+  const resolveCloudWatchWriter = async (
+    ctx: AlertingHandlerContext,
+    request: OpenSearchDashboardsRequest,
+    dsId: string
+  ) => {
+    const resolved = await resolveCloudWatch(ctx, request, dsId);
+    if (!resolved.cwBackend.canWrite) {
+      throw createNotFoundError('CloudWatch alarm changes are not enabled for this request');
+    }
+    return resolved;
+  };
+
+  /** A CloudWatch write route: our own refusals keep their message, the rest are classified. */
+  async function runCloudWatchWrite(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    res: any,
+    operation: string,
+    produce: () => Promise<{ status: number; body: any }>
+  ) {
+    try {
+      return sendResult(res, await produce());
+    } catch (e: unknown) {
+      if (isAlertManagerError(e) && e.kind !== 'internal') {
+        // Logged by kind only: the message can name the alarm.
+        logger.warn(`[${operation}] refused: ${e.kind}`);
+        const field = e.kind === 'validation' ? e.field : undefined;
+        return sendResult(res, {
+          status: errorToStatus(e),
+          body: { error: e.message, ...(field ? { field } : {}) },
+        });
+      }
+      return sendResult(
+        res,
+        classifyToHandlerResult(e, { operation, logger, sourceType: 'cloudwatch' })
+      );
+    }
+  }
+
+  // Create a metric alarm.
+  router.post(
+    {
+      path: '/api/alerting/cloudwatch/{dsId}/alarms',
+      validate: { params: schema.object({ dsId: alertingIdSchema }), body: cwAlarmBodySchema },
+    },
+    async (ctx, req, res) =>
+      runCloudWatchWrite(res, `${CLOUDWATCH_WRITE_OPERATION_PREFIX}create`, async () => {
+        const { cwBackend, ds } = await resolveCloudWatchWriter(
+          ctx as AlertingHandlerContext,
+          req,
+          req.params.dsId
+        );
+        const input = req.body as CloudWatchMetricAlarmInput;
+        await withRouteTimeout(
+          req,
+          (signal) => cwBackend.createMetricAlarm(ds, input, { signal }),
+          CLOUDWATCH_DETAIL_TIMEOUT_MS,
+          'CloudWatch alarm create'
+        );
+        return { status: 200, body: { alarmName: input.alarmName } };
+      })
+  );
+
+  // Replace a metric alarm. The name can't change (CloudWatch has no rename).
+  router.put(
+    {
+      path: '/api/alerting/cloudwatch/{dsId}/alarm',
+      validate: {
+        params: schema.object({ dsId: alertingIdSchema }),
+        query: schema.object({ name: cloudWatchAlarmNameSchema }),
+        body: cwAlarmBodySchema,
+      },
+    },
+    async (ctx, req, res) =>
+      runCloudWatchWrite(res, `${CLOUDWATCH_WRITE_OPERATION_PREFIX}update`, async () => {
+        if (req.body.alarmName !== req.query.name) {
+          throw createValidationError('An alarm name cannot be changed', 'alarmName');
+        }
+        const { cwBackend, ds } = await resolveCloudWatchWriter(
+          ctx as AlertingHandlerContext,
+          req,
+          req.params.dsId
+        );
+        const input = req.body as CloudWatchMetricAlarmInput;
+        await withRouteTimeout(
+          req,
+          (signal) => cwBackend.updateMetricAlarm(ds, input, { signal }),
+          CLOUDWATCH_DETAIL_TIMEOUT_MS,
+          'CloudWatch alarm update'
+        );
+        return { status: 200, body: { alarmName: input.alarmName } };
+      })
+  );
+
+  // Delete an alarm (any type).
+  router.delete(
+    {
+      path: '/api/alerting/cloudwatch/{dsId}/alarm',
+      validate: {
+        params: schema.object({ dsId: alertingIdSchema }),
+        query: schema.object({ name: cloudWatchAlarmNameSchema }),
+      },
+    },
+    async (ctx, req, res) =>
+      runCloudWatchWrite(res, `${CLOUDWATCH_WRITE_OPERATION_PREFIX}delete`, async () => {
+        const { cwBackend, ds } = await resolveCloudWatchWriter(
+          ctx as AlertingHandlerContext,
+          req,
+          req.params.dsId
+        );
+        await withRouteTimeout(
+          req,
+          (signal) => cwBackend.deleteAlarm(ds, req.query.name, { signal }),
+          CLOUDWATCH_DETAIL_TIMEOUT_MS,
+          'CloudWatch alarm delete'
+        );
+        return { status: 200, body: { alarmName: req.query.name } };
+      })
+  );
+
+  // Turn an alarm's actions on or off (any type).
+  router.post(
+    {
+      path: '/api/alerting/cloudwatch/{dsId}/alarm/actions',
+      validate: {
+        params: schema.object({ dsId: alertingIdSchema }),
+        query: schema.object({ name: cloudWatchAlarmNameSchema }),
+        body: schema.object({ enabled: schema.boolean() }),
+      },
+    },
+    async (ctx, req, res) =>
+      runCloudWatchWrite(res, `${CLOUDWATCH_WRITE_OPERATION_PREFIX}actions`, async () => {
+        const { cwBackend, ds } = await resolveCloudWatchWriter(
+          ctx as AlertingHandlerContext,
+          req,
+          req.params.dsId
+        );
+        await withRouteTimeout(
+          req,
+          (signal) =>
+            cwBackend.setAlarmActionsEnabled(ds, req.query.name, req.body.enabled, { signal }),
+          CLOUDWATCH_DETAIL_TIMEOUT_MS,
+          'CloudWatch alarm actions'
+        );
+        return { status: 200, body: { alarmName: req.query.name, enabled: req.body.enabled } };
+      })
+  );
+
+  // One page of metrics for the create form's picker (a read, but only the form needs it).
+  router.get(
+    {
+      path: '/api/alerting/cloudwatch/{dsId}/metrics',
+      validate: {
+        params: schema.object({ dsId: alertingIdSchema }),
+        query: schema.object({
+          namespace: schema.maybe(cwText(255)),
+          metricName: schema.maybe(cwText(255)),
+          nextToken: schema.maybe(cwText(4096)),
+        }),
+      },
+    },
+    async (ctx, req, res) =>
+      runClassifiedHandler(res, 'cloudwatch.metrics.list', 'cloudwatch', async () => {
+        const { cwBackend, ds } = await resolveCloudWatchWriter(
+          ctx as AlertingHandlerContext,
+          req,
+          req.params.dsId
+        );
+        const body = await withRouteTimeout(
+          req,
+          (signal) => cwBackend.listMetrics(ds, req.query, { signal }),
+          CLOUDWATCH_DETAIL_TIMEOUT_MS,
+          'CloudWatch metrics'
+        );
+        return { status: 200, body };
       })
   );
 
