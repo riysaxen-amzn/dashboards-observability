@@ -51,6 +51,7 @@ import { CreateAdRuleFlyout, CreateAdRuleType } from './create_ad_rule_flyout';
 import { EditMonitor } from './create_monitor/edit_monitor';
 import { CreateMetricsMonitor, MetricsMonitorFormState } from './create_metrics_monitor';
 import { CreateCloudWatchAlarm } from './create_cloudwatch_alarm';
+import { deleteCloudWatchAlarm } from './mutations/cloudwatch_alarm_client';
 import type { CloudWatchMetricAlarmInput } from '../../../common/types/alerting';
 import { AlertsDashboard } from './alerts_dashboard';
 import { AlertDetailFlyout } from './alert_detail_flyout';
@@ -919,7 +920,18 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({
         continue;
       }
       try {
-        if (rule.datasourceType === 'prometheus') {
+        if (rule.datasourceType === 'cloudwatch') {
+          // CloudWatch alarms are deleted by name (the row id is the alarm ARN), and only when
+          // writes are on for this request (rows aren't selectable otherwise).
+          if (!coreRefs.cloudwatchWritesEnabled) {
+            throw new Error(
+              i18n.translate('observability.alerting.alarmsPage.toast.cloudWatchReadOnly', {
+                defaultMessage: 'CloudWatch alarms are read-only here.',
+              })
+            );
+          }
+          await deleteCloudWatchAlarm(rule.datasourceId, rule.cloudWatch?.alarmName ?? rule.name);
+        } else if (rule.datasourceType === 'prometheus') {
           // Prometheus rules are deleted via the Prometheus ruler API. Passing
           // the rule name makes the server splice just this rule out of the
           // group, preserving sibling rules in shared groups (the group is
@@ -941,12 +953,15 @@ export const AlarmsPage: React.FC<AlarmsPageProps> = ({
         }
       } catch (e: unknown) {
         failed.push(id);
+        // A classified failure (e.g. CloudWatch access denied) says what to do about it.
+        const classified = extractClassifiedError(e);
         addToast(
-          i18n.translate('observability.alerting.alarmsPage.toast.deleteMonitorFailed', {
-            defaultMessage: 'Failed to delete alert rule',
-          }),
+          classified?.title ??
+            i18n.translate('observability.alerting.alarmsPage.toast.deleteMonitorFailed', {
+              defaultMessage: 'Failed to delete alert rule',
+            }),
           'danger',
-          extractServerErrorMessage(e)
+          classified?.remediation ?? classified?.message ?? extractServerErrorMessage(e)
         );
       }
     }

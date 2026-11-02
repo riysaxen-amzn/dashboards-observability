@@ -988,3 +988,55 @@ describe('parseAlarmsHashRoute', () => {
     expect(parseAlarmsHashRoute('#/something-else')).toEqual({});
   });
 });
+
+const mockDeleteCloudWatchAlarm = jest.fn();
+jest.mock('../mutations/cloudwatch_alarm_client', () => ({
+  deleteCloudWatchAlarm: (...args: unknown[]) => mockDeleteCloudWatchAlarm(...args),
+  createCloudWatchAlarm: jest.fn(),
+  updateCloudWatchAlarm: jest.fn(),
+  setCloudWatchAlarmActionsEnabled: jest.fn(),
+  listCloudWatchMetrics: jest.fn(async () => ({ metrics: [] })),
+}));
+
+describe('AlarmsPage table delete of CloudWatch alarms', () => {
+  const cwRow = {
+    id: 'arn:aws:cloudwatch:us-west-2:304104589695:alarm:ui-test-latency',
+    name: 'ui-test-latency',
+    datasourceId: 'cloudwatch',
+    datasourceType: 'cloudwatch',
+    definitionType: 'cloudwatch_alarm',
+    cloudWatch: { state: 'OK', alarmType: 'metric', alarmName: 'ui-test-latency' },
+  };
+  const deleteVia = async () => {
+    mockUseRulesData.mockReturnValue({ ...emptyRulesHookResult, rules: [cwRow] });
+    await act(async () => {
+      render(<AlarmsPage {...defaultProps} />);
+    });
+    fireEvent.click(screen.getByTestId('alertManagerTabs-rules'));
+    const tableProps = mockMonitorsTable.mock.calls[mockMonitorsTable.mock.calls.length - 1][0] as {
+      onDelete: (ids: string[]) => Promise<void>;
+    };
+    await act(async () => {
+      await tableProps.onDelete([cwRow.id]);
+    });
+  };
+  afterEach(() => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require('../../../framework/core_refs').coreRefs.cloudwatchWritesEnabled = undefined;
+  });
+
+  it('deletes by alarm name through the CloudWatch route, not the OpenSearch monitor route', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require('../../../framework/core_refs').coreRefs.cloudwatchWritesEnabled = true;
+    mockDeleteCloudWatchAlarm.mockResolvedValue({});
+    await deleteVia();
+    expect(mockDeleteCloudWatchAlarm).toHaveBeenCalledWith('cloudwatch', 'ui-test-latency');
+    expect(mockDeleteMonitor).not.toHaveBeenCalled();
+  });
+
+  it('never calls either route while CloudWatch is read-only', async () => {
+    await deleteVia();
+    expect(mockDeleteCloudWatchAlarm).not.toHaveBeenCalled();
+    expect(mockDeleteMonitor).not.toHaveBeenCalled();
+  });
+});

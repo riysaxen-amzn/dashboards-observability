@@ -22,7 +22,8 @@ import { EuiResizableContainer } from '@elastic/eui';
 import type { CloudWatchMetricAlarmInput } from '../../../../common/types/alerting';
 import { Datasource, UnifiedRuleSummary } from '../../../../common/types/alerting';
 import { useFacetCollapse } from '../facet_filter_panel';
-import { isStandardOpenSearchDatasource } from '../shared_constants';
+import { isCloudWatchRule, isStandardOpenSearchDatasource } from '../shared_constants';
+import { coreRefs } from '../../../framework/core_refs';
 import { buildTableColumns, DEFAULT_VISIBLE } from './monitors_table_columns';
 import { isPending } from './pending_rules';
 import {
@@ -243,8 +244,16 @@ export const MonitorsTable: React.FC<MonitorsTableProps> = ({
   // Pending (optimistic, unconfirmed) rows carry a synthetic id the backend
   // doesn't know yet, so they must not be checkbox-selectable — a bulk delete
   // against a `new-` id would 404.
+  // CloudWatch alarms can only be deleted when CloudWatch writes are on for this request.
   const selectableIds = useMemo(
-    () => new Set(rules.filter((r) => !isPending(r)).map((r) => r.id)),
+    () =>
+      new Set(
+        rules
+          .filter(
+            (r) => !isPending(r) && (!isCloudWatchRule(r) || !!coreRefs.cloudwatchWritesEnabled)
+          )
+          .map((r) => r.id)
+      ),
     [rules]
   );
   useEffect(() => {
